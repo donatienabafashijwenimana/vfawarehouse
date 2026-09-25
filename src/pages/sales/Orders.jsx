@@ -37,7 +37,7 @@ export default function Orders() {
     <div className="space-y-6">
       <PageHeader
         title={isCustomer ? 'My Orders' : 'Order Management'}
-        subtitle={isCustomer ? 'Place orders and follow their progress through delivery.' : 'Confirm orders to reserve stock (spec §22, §36)'}
+        subtitle={isCustomer ? 'Place orders and follow their progress through delivery.' : 'Confirm orders to reserve stock'}
         actions={<Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Place Order</Button>}
       />
 
@@ -134,7 +134,7 @@ export default function Orders() {
         rows={rows}
         searchKeys={['order_number']}
         searchPlaceholder="Search order number…"
-        emptyHint={isCustomer ? 'No orders yet. Place an order to get started.' : 'No orders match these filters.'}
+        emptyHint={isCustomer ? 'No orders yet.' : 'No orders match these filters.'}
         filters={
           <FilterSelect
             value={statusFilter}
@@ -174,7 +174,7 @@ export default function Orders() {
         sale={paying}
         onClose={() => setPaying(null)}
         onSubmit={(data) => {
-          run(() => store.addPayment({ sale_id: paying.id, amount: Number(data.amount), method: data.method, payment_date: data.payment_date, reference: data.reference }), 'Payment recorded');
+          run(() => store.addPayment({ sale_id: paying.id, amount: Number(data.amount), method: data.method, payment_date: data.payment_date, reference: data.reference, evidence: data.evidence }), 'Payment recorded');
           setPaying(null);
         }}
       />
@@ -416,9 +416,10 @@ function InvoiceOrderModal({ order, onClose }) {
 }
 
 function DeliveryPaymentModal({ sale, onClose, onSubmit }) {
-  const [form, setForm] = useState({ amount: '', method: 'Cash', payment_date: new Date().toISOString().slice(0, 10), reference: '' });
+  const [form, setForm] = useState({ amount: '', method: 'Cash', payment_date: new Date().toISOString().slice(0, 10), reference: '', evidence: null });
   const [showWays, setShowWays] = useState(false);
   const [amountWarning, setAmountWarning] = useState(false);
+  const [fileError, setFileError] = useState('');
   if (!sale) return null;
   const outstanding = Math.max(0, Number(sale.total) - Number(sale.paid_amount ?? 0));
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -441,6 +442,21 @@ function DeliveryPaymentModal({ sale, onClose, onSubmit }) {
           <Input label="Payment date" type="date" value={form.payment_date} onChange={set('payment_date')} required />
         </div>
         <Input label="Reference (optional)" value={form.reference} onChange={set('reference')} placeholder="Mobile money reference or bank slip number" />
+        <label className="block text-sm font-medium text-gray-700">Payment evidence <span className="text-red-600">*</span> <span className="font-normal text-gray-400">(image or PDF, up to 5 MB)</span>
+          <input className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm" type="file" accept="image/*,application/pdf" required onChange={(event) => {
+            const file = event.target.files?.[0];
+            setFileError('');
+            if (!file) return;
+            if (!(file.type.startsWith('image/') || file.type === 'application/pdf')) { setFileError('Choose an image or PDF file.'); event.target.value = ''; return; }
+            if (file.size > 5 * 1024 * 1024) { setFileError('Choose a file smaller than 5 MB.'); event.target.value = ''; return; }
+            const reader = new FileReader();
+            reader.onload = () => setForm((current) => ({ ...current, evidence: { name: file.name, type: file.type, data: reader.result } }));
+            reader.onerror = () => setFileError('The selected file could not be read.');
+            reader.readAsDataURL(file);
+          }} />
+        </label>
+        {fileError && <p role="alert" className="text-sm text-red-600">{fileError}</p>}
+        {form.evidence && <p className="text-xs text-gray-500">Attached: {form.evidence.name}</p>}
         <Button type="button" variant="secondary" onClick={() => setShowWays((visible) => !visible)}>
           {showWays ? 'Hide payment options' : 'How can the remaining balance be paid?'}
         </Button>
@@ -455,7 +471,7 @@ function DeliveryPaymentModal({ sale, onClose, onSubmit }) {
         </div>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > outstanding}><CreditCard className="h-4 w-4" /> Record payment</Button>
+          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > outstanding || !form.evidence || Boolean(fileError)}><CreditCard className="h-4 w-4" /> Record payment</Button>
         </div>
       </form>
     </Modal>
@@ -513,7 +529,6 @@ function ConfirmOrderModal({ order, onClose, onConfirm }) {
   return (
     <Modal open onClose={onClose} title={`Confirm ${order.order_number}`}>
       <div className="space-y-4">
-        <p className="text-sm text-gray-600">Choose a warehouse and confirm the quantity to reserve. The confirmed quantity may be lower than the original request.</p>
         <div className="overflow-hidden rounded-xl border border-gray-100 text-sm">
           {availability.map((item) => <div key={item.index} className="grid grid-cols-1 gap-2 border-b border-gray-100 px-3 py-3 last:border-0 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
             <span className="pb-2 text-gray-700">{productName(item.product_id)}</span>

@@ -27,8 +27,10 @@ export const salesSlice = (set, get) => ({
     get().logAction(`Updated customer`, 'Customers');
   },
   deleteCustomer(id) {
-    const used = get().orders.some((o) => o.customer_id === id) || get().sales.some((s) => s.customer_id === id);
-    if (used) throw new Error('Cannot delete a customer with orders or sales. Deactivate instead.');
+    const used = get().orders.some((o) => o.customer_id === id)
+      || get().sales.some((s) => s.customer_id === id)
+      || get().payments.some((payment) => payment.customer_id === id);
+    if (used) throw new Error('Cannot delete a customer with orders, sales, or payments. Deactivate instead.');
     set((s) => ({ customers: s.customers.filter((c) => c.id !== id) }));
     get().logAction(`Deleted customer`, 'Customers');
   },
@@ -46,7 +48,8 @@ export const salesSlice = (set, get) => ({
       order_number: generateOrderNumber(get().orders),
       customer_id,
       status: 'PENDING',
-      items: items.map((it) => ({ ...it })),
+      created_by: get().profile?.id,
+      items: items.map((it) => ({ ...it, id: it.id ?? uid() })),
       expected_amount: expectedAmount,
       paid_amount: paidAmount,
       remaining_amount: expectedAmount - paidAmount,
@@ -213,7 +216,7 @@ export const salesSlice = (set, get) => ({
       const qty = Number(it.quantity);
       if (!Number.isFinite(qty) || qty <= 0) throw new Error('Sale quantities must be positive');
       subtotal += qty * price;
-      return { ...it, unit_price: price, subtotal: qty * price };
+      return { ...it, id: it.id ?? uid(), unit_price: price, subtotal: qty * price };
     });
     const total = Math.max(0, subtotal - Number(discount));
 
@@ -303,6 +306,7 @@ export const salesSlice = (set, get) => ({
       sale_date: new Date().toISOString().slice(0, 10),
       order_number: order?.order_number ?? null,
       created_by: get().profile?.fullName ?? '—',
+      created_by_id: get().profile?.id,
       created_at: nowISO(),
     };
     set((s) => ({ sales: [sale, ...s.sales] }));
@@ -357,6 +361,7 @@ export const salesSlice = (set, get) => ({
       status,
       payment_date: payment_date || new Date().toISOString().slice(0, 10),
       recorded_by: get().profile?.fullName ?? '—',
+      recorded_by_id: get().profile?.id,
       created_at: nowISO(),
     };
     set((s) => ({ payments: [payment, ...s.payments] }));
@@ -364,11 +369,14 @@ export const salesSlice = (set, get) => ({
   },
 
   /** Record a payment against a sale; recalculates PAID/PARTIAL/UNPAID (§23). */
-  addPayment({ sale_id, amount, method, reference = '', payment_date }) {
+  addPayment({ sale_id, amount, method, reference = '', payment_date, evidence = null }) {
     const sale = get().sales.find((s) => s.id === sale_id);
     if (!sale) throw new Error('Sale not found');
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) throw new Error('Payment amount must be positive');
+    if (!evidence || !(typeof evidence === 'string' || evidence.data || evidence.url)) {
+      throw new Error('Payment evidence is required');
+    }
     const previousPaid = Number(sale.paid_amount) || 0;
     const outstanding = Math.max(0, Number(sale.total) - previousPaid);
     if (amt > outstanding) throw new Error('Payment exceeds the remaining invoice balance');
@@ -381,6 +389,7 @@ export const salesSlice = (set, get) => ({
       method,
       reference,
       payment_date,
+      evidence,
     });
 
     set((s) => ({
@@ -394,12 +403,15 @@ export const salesSlice = (set, get) => ({
     get().pushNotification('success', 'Payment received', `${amt.toLocaleString()} RWF on invoice ${sale.invoice_number}.`);
   },
 
-  requestPayment({ sale_id, amount, method, reference = '', payment_date }) {
+  requestPayment({ sale_id, amount, method, reference = '', payment_date, evidence = null }) {
     const sale = get().sales.find((item) => item.id === sale_id);
     if (!sale) throw new Error('Invoice not found');
     const profile = get().profile;
     if (profile?.role !== 'customer' || profile.customer_id !== sale.customer_id) {
       throw new Error('You can only request payment confirmation for your own invoice');
+    }
+    if (!evidence || !(typeof evidence === 'string' || evidence.data || evidence.url)) {
+      throw new Error('Payment evidence is required');
     }
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) throw new Error('Payment amount must be positive');
@@ -418,6 +430,7 @@ export const salesSlice = (set, get) => ({
       method,
       reference,
       payment_date,
+      evidence,
       status: 'PENDING',
     });
     get().logAction(`Payment confirmation requested for ${sale.invoice_number}`, 'Payments');
@@ -439,7 +452,7 @@ export const salesSlice = (set, get) => ({
     const newPaid = paid + amount;
     set((state) => ({
       payments: state.payments.map((item) => item.id === paymentId
-        ? { ...item, status: 'CONFIRMED', confirmed_by: get().profile?.fullName ?? 'Manager', confirmed_at: nowISO() }
+        ? { ...item, status: 'CONFIRMED', confirmed_by: get().profile?.fullName ?? 'Manager', confirmed_by_id: get().profile?.id, confirmed_at: nowISO() }
         : item),
       sales: state.sales.map((item) => item.id === sale.id
         ? { ...item, paid_amount: newPaid, payment_status: paymentStatus(item.total, newPaid) }
@@ -455,7 +468,7 @@ export const salesSlice = (set, get) => ({
     if (!payment || payment.status !== 'PENDING') throw new Error('Pending payment request not found');
     set((state) => ({
       payments: state.payments.map((item) => item.id === paymentId
-        ? { ...item, status: 'REJECTED', confirmed_by: get().profile?.fullName ?? 'Manager', confirmed_at: nowISO() }
+        ? { ...item, status: 'REJECTED', confirmed_by: get().profile?.fullName ?? 'Manager', confirmed_by_id: get().profile?.id, confirmed_at: nowISO() }
         : item),
     }));
     get().logAction(`Rejected payment request for ${payment.order_number ?? 'invoice'}`, 'Payments');

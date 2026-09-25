@@ -217,6 +217,7 @@ export const warehouseSlice = (set, get) => ({
           ...row,
           id: uid(),
           created_by: get().profile?.fullName ?? get().profile?.email ?? 'system',
+          created_by_id: get().profile?.id,
           created_at: nowISO(),
         },
         ...s.movements,

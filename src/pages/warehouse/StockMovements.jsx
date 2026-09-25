@@ -24,7 +24,7 @@ export default function StockMovements() {
     <div className="space-y-6">
       <PageHeader
         title="Stock Movements"
-        subtitle="Complete audit trail of every inventory change (spec §19, §37)"
+        subtitle="Review every change to inventory"
       />
 
       <DataTable

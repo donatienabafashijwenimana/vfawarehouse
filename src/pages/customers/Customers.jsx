@@ -3,11 +3,13 @@ import { Plus } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, StatusBadge } from '../../components/ui/primitives';
-import { Modal } from '../../components/ui/Modal';
+import { ConfirmDialog, Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
+import { usePermissions } from '../../hooks/usePermissions';
 import { formatRWF, formatDate } from '../../lib/format';
+import { customersApi, usersApi } from '../../services/dataService';
 
 const TYPES = ['Farmer', 'Cooperative', 'Agro-dealer', 'Distributor', 'Organization', 'Individual', 'Other'];
 const EMPTY = { name: '', phone: '', email: '', address: '', customer_type: 'Farmer', status: 'ACTIVE' };
@@ -16,11 +18,19 @@ export default function Customers() {
   const customers = useStore((s) => s.customers);
   const addCustomer = useStore((s) => s.addCustomer);
   const updateCustomer = useStore((s) => s.updateCustomer);
-  const deleteCustomer = useStore((s) => s.deleteCustomer);
+  const users = useStore((s) => s.users);
+  const orders = useStore((s) => s.orders);
+  const sales = useStore((s) => s.sales);
+  const payments = useStore((s) => s.payments);
+  const loadWorkspace = useStore((s) => s.loadWorkspace);
+  const pushToast = useStore((s) => s.pushToast);
+  const { can } = usePermissions();
   const customerOutstanding = useStore((s) => s.customerOutstanding);
   const run = useAction();
 
   const [modal, setModal] = useState(null);
+  const [customerToDelete, setCustomerToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const [typeFilter, setTypeFilter] = useState('');
 
   const outstandingFor = (id) => customerOutstanding(id);
@@ -34,6 +44,38 @@ export default function Customers() {
       run(() => updateCustomer(modal.customer.id, form), 'Customer updated');
     }
     setModal(null);
+  }
+
+  async function confirmDeleteCustomer() {
+    if (!customerToDelete || deleting) return;
+    const customer = customerToDelete;
+    const hasHistory = orders.some((order) => order.customer_id === customer.id)
+      || sales.some((sale) => sale.customer_id === customer.id)
+      || payments.some((payment) => payment.customer_id === customer.id);
+    if (hasHistory) {
+      pushToast('This customer has orders, sales, or payments. Deactivate the customer to preserve transaction history.', 'error');
+      setCustomerToDelete(null);
+      return;
+    }
+
+    setDeleting(true);
+    const linkedProfile = customer.user_id ? users.find((user) => user.id === customer.user_id) : null;
+    try {
+      if (linkedProfile) await usersApi.update(linkedProfile.id, { status: 'INACTIVE' });
+      try {
+        await customersApi.remove(customer.id);
+      } catch (error) {
+        if (linkedProfile) await usersApi.update(linkedProfile.id, { status: linkedProfile.status }).catch(() => {});
+        throw error;
+      }
+      await loadWorkspace();
+      pushToast('Customer deleted', 'success');
+      setCustomerToDelete(null);
+    } catch (error) {
+      pushToast(error?.message ?? 'Could not delete customer', 'error');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -64,9 +106,7 @@ export default function Customers() {
           { key: 'actions', label: '', sortable: false, render: (c) => (
             <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
               <Button size="sm" variant="secondary" onClick={() => setModal({ mode: 'edit', customer: c })}>Edit</Button>
-              <Button size="sm" variant="ghost" onClick={() => run(() => deleteCustomer(c.id), 'Customer deleted')}>
-                Delete
-              </Button>
+              {can('customers.delete') && <Button size="sm" variant="ghost" onClick={() => setCustomerToDelete(c)}>Delete</Button>}
             </div>
           )},
         ]}
@@ -85,6 +125,14 @@ export default function Customers() {
       />
 
       <CustomerModal modal={modal} onClose={() => setModal(null)} onSave={save} />
+      <ConfirmDialog
+        open={!!customerToDelete}
+        onClose={() => !deleting && setCustomerToDelete(null)}
+        title="Delete customer"
+        message={`Delete ${customerToDelete?.name ?? 'this customer'}? Its linked login, if any, will be deactivated. Customers with transaction history must be deactivated instead.`}
+        confirmLabel={deleting ? 'Deleting…' : 'Delete customer'}
+        onConfirm={confirmDeleteCustomer}
+      />
     </div>
   );
 }

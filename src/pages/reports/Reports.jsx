@@ -3,18 +3,30 @@ import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+import { Printer } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { PageHeader, ChartCard } from '../../components/ui/KPICard';
+import { Button, Select } from '../../components/ui/primitives';
 import { CHART_COLORS, formatNumber, formatRWF } from '../../lib/format';
 import { productionEfficiency } from '../../lib/calc';
+import ReportGenerator from './ReportGenerator';
 
-const TABS = ['Production', 'Inventory', 'Sales', 'Financial'];
+const TABS = ['Production', 'Inventory', 'Sales', 'Financial', 'Custom Reports'];
 
 export default function Reports() {
   const [tab, setTab] = useState('Production');
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const state = useStore();
+  const years = useMemo(() => {
+    const values = new Set([String(new Date().getFullYear())]);
+    [...state.sales.map((item) => item.sale_date), ...state.payments.map((item) => item.payment_date),
+      ...state.expenses.map((item) => item.expense_date), ...state.batches.map((item) => item.end_date ?? item.start_date ?? item.created_at)]
+      .forEach((value) => { const candidate = String(value ?? '').slice(0, 4); if (/^\d{4}$/.test(candidate)) values.add(candidate); });
+    return [...values].sort((a, b) => Number(b) - Number(a));
+  }, [state.sales, state.payments, state.expenses, state.batches]);
   return (
     <div className="space-y-6">
-      <PageHeader title="Reports & Analytics" subtitle="Production, inventory, sales and financial reporting (spec §26)" />
+      <PageHeader title="Reports & Analytics" subtitle="Production, inventory, sales and financial reporting" />
 
       <div className="flex flex-wrap gap-2">
         {TABS.map((t) => (
@@ -28,46 +40,54 @@ export default function Reports() {
         ))}
       </div>
 
-      {tab === 'Production' && <ProductionReport />}
-      {tab === 'Inventory' && <InventoryReport />}
-      {tab === 'Sales' && <SalesReport />}
-      {tab === 'Financial' && <FinancialReport />}
+      {tab !== 'Custom Reports' && <>
+        <div className="no-print flex flex-wrap items-end justify-between gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+          <p className="text-sm text-gray-600">{tab === 'Inventory' ? 'Current inventory snapshot' : <>Annual analytics for <strong>{year}</strong></>}</p>
+          <div className="flex w-full flex-wrap items-end gap-3 sm:w-auto">
+            {tab !== 'Inventory' && <div className="w-full sm:w-48"><Select label="Analytics year" value={year} onChange={(event) => setYear(event.target.value)}>{years.map((item) => <option key={item} value={item}>{item}</option>)}</Select></div>}
+            <Button variant="secondary" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print analytics</Button>
+          </div>
+        </div>
+        <main className="analytics-print space-y-4">
+          {tab === 'Inventory' && <p className="no-print rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-800">Inventory analytics show the current stock snapshot. Historical stock by year is not available.</p>}
+          {tab === 'Production' && <ProductionReport year={year} />}
+          {tab === 'Inventory' && <InventoryReport />}
+          {tab === 'Sales' && <SalesReport year={year} />}
+          {tab === 'Financial' && <FinancialReport year={year} />}
+        </main>
+      </>}
+      {tab === 'Custom Reports' && <ReportGenerator />}
     </div>
   );
 }
 
-function useMonths(n = 6) {
+function useMonths(year) {
   return useMemo(() => {
     const out = [];
-    const d = new Date();
-    d.setDate(1);
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    for (let i = n - 1; i >= 0; i--) {
-      const dd = new Date(d);
-      dd.setMonth(d.getMonth() - i);
-      out.push({ key: dd.toISOString().slice(0, 7), label: MONTHS[dd.getMonth()] });
-    }
+    for (let month = 0; month < 12; month++) out.push({ key: `${year}-${String(month + 1).padStart(2, '0')}`, label: MONTHS[month] });
     return out;
-  }, [n]);
+  }, [year]);
 }
 
 /* ---------------- Production ---------------- */
-function ProductionReport() {
+function ProductionReport({ year }) {
   const batches = useStore((s) => s.batches);
   const varieties = useStore((s) => s.varieties);
   const seedClasses = useStore((s) => s.seedClasses);
-  const months = useMonths();
+  const yearBatches = batches.filter((batch) => String(batch.end_date ?? batch.start_date ?? batch.created_at ?? '').slice(0, 4) === year);
+  const months = useMonths(year);
 
   const byVariety = varieties.map((v, i) => ({
     name: v.name,
-    input: batches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + b.input_qty, 0),
-    output: batches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.output_qty ?? 0), 0),
-    rejected: batches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
+    input: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + b.input_qty, 0),
+    output: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.output_qty ?? 0), 0),
+    rejected: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
     color: CHART_COLORS[i % CHART_COLORS.length],
   }));
 
   const byClass = seedClasses.map((c) => {
-    const bs = batches.filter((b) => b.seed_class_id === c.id);
+    const bs = yearBatches.filter((b) => b.seed_class_id === c.id);
     const input = bs.reduce((s, b) => s + b.input_qty, 0);
     const output = bs.reduce((s, b) => s + (b.output_qty ?? 0), 0);
     return { name: c.name, input, output, efficiency: productionEfficiency(input, output) };
@@ -75,14 +95,14 @@ function ProductionReport() {
 
   const monthly = months.map(({ key, label }) => ({
     month: label,
-    output: batches.filter((b) => (b.end_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.output_qty ?? 0), 0),
-    rejected: batches.filter((b) => (b.end_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
+    output: yearBatches.filter((b) => (b.end_date ?? b.start_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.output_qty ?? 0), 0),
+    rejected: yearBatches.filter((b) => (b.end_date ?? b.start_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
   }));
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Production by Variety" subtitle="Input vs output (kg)">
+        <ChartCard title={`Production by Variety · ${year}`} subtitle="Input vs output (kg)">
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={byVariety}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -97,7 +117,7 @@ function ProductionReport() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Monthly Output vs Rejected" subtitle="Last 6 months (kg)">
+        <ChartCard title={`Monthly Output vs Rejected · ${year}`} subtitle="Annual total by month (kg)">
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={monthly}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -253,50 +273,41 @@ function InventoryReport() {
 }
 
 /* ---------------- Sales ---------------- */
-function SalesReport() {
+function SalesReport({ year }) {
   const sales = useStore((s) => s.sales);
   const products = useStore((s) => s.products);
   const customers = useStore((s) => s.customers);
   const users = useStore((s) => s.users);
-  const months = useMonths();
-
-  const daily = useMemo(() => {
-    const last14 = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      last14.push({
-        day: `${d.getDate()}/${d.getMonth() + 1}`,
-        revenue: sales.filter((s) => s.sale_date === key).reduce((sum, s) => sum + s.total, 0),
-      });
-    }
-    return last14;
-  }, [sales]);
+  const yearSales = sales.filter((sale) => String(sale.sale_date ?? '').slice(0, 4) === year);
+  const months = useMonths(year);
 
   const monthly = months.map(({ key, label }) => ({
     month: label,
-    revenue: sales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0),
+    revenue: yearSales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0),
+  }));
+  const monthlyTrend = monthly.map((item, index) => ({
+    ...item,
+    cumulative: monthly.slice(0, index + 1).reduce((sum, month) => sum + month.revenue, 0),
   }));
 
   const byProduct = products.map((p) => ({
     name: p.name.replace(' Seed', ''),
-    value: sales.flatMap((s) => s.items).filter((it) => it.product_id === p.id).reduce((s, it) => s + it.quantity * (it.unit_price ?? 0), 0),
+    value: yearSales.flatMap((s) => s.items ?? []).filter((it) => it.product_id === p.id).reduce((s, it) => s + it.quantity * (it.unit_price ?? 0), 0),
   })).filter((d) => d.value > 0);
 
   const byCustomer = customers.map((c) => ({
     name: c.name.length > 20 ? `${c.name.slice(0, 20)}…` : c.name,
-    value: sales.filter((s) => s.customer_id === c.id).reduce((s, x) => s + x.total, 0),
+    value: yearSales.filter((s) => s.customer_id === c.id).reduce((s, x) => s + x.total, 0),
   })).filter((d) => d.value > 0);
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Daily Sales — Last 14 days" subtitle="Revenue (RWF)">
+        <ChartCard title={`Monthly Sales · ${year}`} subtitle="Revenue by month (RWF)">
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={daily}>
+            <BarChart data={monthly}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="day" tick={{ fontSize: 10 }} />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => formatRWF(v)} />
               <Bar dataKey="revenue" fill="#2d9e2d" radius={[3, 3, 0, 0]} />
@@ -304,14 +315,14 @@ function SalesReport() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Monthly Sales" subtitle="Revenue by month (RWF)">
+        <ChartCard title={`Cumulative Sales Trend · ${year}`} subtitle="Monthly revenue progression (RWF)">
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={monthly}>
+            <LineChart data={monthlyTrend}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => formatRWF(v)} />
-              <Line type="monotone" dataKey="revenue" stroke="#2d9e2d" strokeWidth={2} />
+              <Line type="monotone" dataKey="cumulative" stroke="#2d9e2d" strokeWidth={2} name="Cumulative revenue" />
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -356,7 +367,7 @@ function SalesReport() {
           </thead>
           <tbody>
             {users.filter((u) => u.role !== 'customer').map((u) => {
-              const us = sales.filter((s) => s.created_by === u.fullName);
+              const us = yearSales.filter((s) => s.created_by === u.fullName);
               if (!us.length) return null;
               return (
                 <tr key={u.id} className="border-b border-gray-50 last:border-0">
@@ -374,28 +385,31 @@ function SalesReport() {
 }
 
 /* ---------------- Financial ---------------- */
-function FinancialReport() {
+function FinancialReport({ year }) {
   const sales = useStore((s) => s.sales);
   const payments = useStore((s) => s.payments);
   const expenses = useStore((s) => s.expenses);
-  const months = useMonths();
+  const yearSales = sales.filter((item) => String(item.sale_date ?? '').slice(0, 4) === year);
+  const yearPayments = payments.filter((item) => String(item.payment_date ?? '').slice(0, 4) === year && !['PENDING', 'REJECTED'].includes(item.status));
+  const yearExpenses = expenses.filter((item) => String(item.expense_date ?? '').slice(0, 4) === year);
+  const months = useMonths(year);
 
-  const revenue = sales.reduce((s, x) => s + x.total, 0);
-  const received = payments.reduce((s, p) => s + p.amount, 0);
+  const revenue = yearSales.reduce((s, x) => s + x.total, 0);
+  const received = yearPayments.reduce((s, p) => s + p.amount, 0);
   const outstanding = revenue - received;
-  const exp = expenses.reduce((s, e) => s + e.amount, 0);
+  const exp = yearExpenses.reduce((s, e) => s + e.amount, 0);
   const net = revenue - exp;
 
   const monthly = months.map(({ key, label }) => ({
     month: label,
-    revenue: sales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0),
-    expenses: expenses.filter((e) => (e.expense_date ?? '').slice(0, 7) === key).reduce((s, e) => s + e.amount, 0),
-    net: sales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0)
-      - expenses.filter((e) => (e.expense_date ?? '').slice(0, 7) === key).reduce((s, e) => s + e.amount, 0),
+    revenue: yearSales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0),
+    expenses: yearExpenses.filter((e) => (e.expense_date ?? '').slice(0, 7) === key).reduce((s, e) => s + e.amount, 0),
+    net: yearSales.filter((s) => (s.sale_date ?? '').slice(0, 7) === key).reduce((s, x) => s + x.total, 0)
+      - yearExpenses.filter((e) => (e.expense_date ?? '').slice(0, 7) === key).reduce((s, e) => s + e.amount, 0),
   }));
 
   const byCategory = {};
-  expenses.forEach((e) => {
+  yearExpenses.forEach((e) => {
     byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount;
   });
   const expenseData = Object.entries(byCategory).map(([name, value], i) => ({
@@ -420,7 +434,7 @@ function FinancialReport() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Revenue vs Expenses" subtitle="Monthly (RWF)">
+        <ChartCard title={`Revenue vs Expenses · ${year}`} subtitle="Annual totals grouped by month (RWF)">
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={monthly}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -435,7 +449,7 @@ function FinancialReport() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Expenses by Category" subtitle="All time (RWF)">
+        <ChartCard title={`Expenses by Category · ${year}`} subtitle="Annual expense totals (RWF)">
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie data={expenseData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={48}>

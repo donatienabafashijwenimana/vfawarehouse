@@ -39,7 +39,7 @@ export default function Income() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Income" subtitle="Revenue, receivables and net income (spec §25)" />
+      <PageHeader title="Income" subtitle="Revenue, receivables and net income" />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KPICard icon={TrendingUp} label="Total Sales Revenue" value={formatRWF(totals.revenue)} tone="green" />

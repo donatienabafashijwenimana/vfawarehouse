@@ -2,15 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, User } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import { DEMO_MODE } from '../../services/api';
 import AuthLayout, { AuthCardHeader } from '../../components/AuthLayout';
-
-const DEMO_ACCOUNTS = [
-  { label: 'Manager', email: 'manager@vfa.rw' },
-  { label: 'Staff', email: 'staff@vfa.rw' },
-  { label: 'Warehouse', email: 'warehouse@vfa.rw' },
-  { label: 'Customer', email: 'customer@vfa.rw' },
-];
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -37,7 +29,7 @@ export default function Login() {
 
   return (
     <AuthLayout>
-      <AuthCardHeader title="Welcome Back" subtitle="Sign in to your account" badge={DEMO_MODE ? 'Demo mode — no database connected' : null} />
+      <AuthCardHeader title="Welcome Back" subtitle="Sign in to your account" />
 
             <form onSubmit={handleLogin} className="space-y-5">
               <div>
@@ -90,24 +82,6 @@ export default function Login() {
                 {loading ? 'Signing in…' : 'Sign In'}
               </button>
             </form>
-
-            {DEMO_MODE && (
-              <div className="mt-6 rounded-xl border border-gray-100 bg-gray-50 p-4">
-                <p className="mb-2 text-xs font-semibold text-gray-500">Demo accounts (password: vfa2025)</p>
-                <div className="flex flex-wrap gap-2">
-                  {DEMO_ACCOUNTS.map((acc) => (
-                    <button
-                      key={acc.email}
-                      type="button"
-                      onClick={() => { setEmail(acc.email); setPassword('vfa2025'); }}
-                      className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:border-green-300 hover:text-green-700"
-                    >
-                      {acc.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <div className="mt-6 flex items-center justify-between text-sm">
               <Link to="/reset-password" className="text-green-700 hover:underline">Forgot password?</Link>

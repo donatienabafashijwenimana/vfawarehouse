@@ -244,7 +244,7 @@ function CustomerDashboard() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <ChartCard title="Recent activity" subtitle="Latest order, invoice, and payment updates">
-          {activity.length === 0 ? <p className="py-6 text-center text-sm text-gray-500">Your order and payment updates will appear here.</p> : (
+          {activity.length === 0 ? null : (
             <div className="divide-y divide-gray-100">
               {activity.map((item) => {
                 const Icon = item.icon;

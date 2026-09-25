@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import { demoData } from './demoData';
+import { supabaseConfigured } from '../services/supabase';
+import { loadWorkspaceData } from '../services/workspaceService';
+import { syncWorkspaceChanges } from '../services/workspaceSync';
 import { authSlice } from './slices/authSlice';
 import { usersSlice } from './slices/usersSlice';
 import { catalogSlice } from './slices/catalogSlice';
@@ -9,56 +11,47 @@ import { salesSlice } from './slices/salesSlice';
 import { financeSlice } from './slices/financeSlice';
 import { systemSlice } from './slices/systemSlice';
 
-/**
- * Root store: one Zustand store composed of domain slices.
- * Demo mode starts hydrated with demoData; live mode loads from Supabase.
- */
-
-/** Keys persisted on every mutation so demo-mode input survives a reload. */
-const PERSISTED_KEYS = [
-  'users',
-  'categories',
-  'seedClasses',
-  'varieties',
-  'products',
-  'warehouses',
-  'inventory',
-  'movements',
-  'batches',
-  'stages',
-  'qualityChecks',
-  'customers',
-  'orders',
-  'sales',
-  'payments',
-  'expenses',
-  'notifications',
-  'auditLogs',
-  'settings',
+const DATA_KEYS = [
+  'users', 'categories', 'seedClasses', 'varieties', 'products', 'warehouses', 'inventory', 'movements',
+  'batches', 'stages', 'qualityChecks', 'customers', 'orders', 'sales', 'payments', 'expenses',
+  'notifications', 'auditLogs', 'settings',
 ];
 
-const STORAGE_KEY = 'vfa_demo_store_v1';
+let baseline = null;
+let initialized = false;
+let syncTimer = null;
+let syncing = false;
+let syncPending = false;
+let syncBound = false;
 
-let persistBound = false;
-
-function loadSnapshot() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.data?.products)) return null;
-    return parsed.data;
-  } catch {
-    return null;
-  }
+function snapshot(state) {
+  return Object.fromEntries(DATA_KEYS.map((key) => [key, state[key]]));
 }
 
-function dumpSnapshot(state) {
-  const data = {};
-  for (const key of PERSISTED_KEYS) data[key] = state[key];
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data }));
-  } catch { /* storage full / unavailable — demo data stays in memory */ }
+function bindDatabaseSync(get) {
+  if (!supabaseConfigured || syncBound) return;
+  syncBound = true;
+  useStore.subscribe((state) => {
+    if (!state.dbReady || !state.profile) return;
+    syncPending = true;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(async () => {
+      if (syncing || !syncPending || !baseline) return;
+      syncing = true;
+      syncPending = false;
+      const current = snapshot(get());
+      try {
+        await syncWorkspaceChanges(baseline, current);
+        baseline = current;
+      } catch (error) {
+        get().pushToast(`Database save failed: ${error.message}`, 'error');
+        syncPending = true;
+      } finally {
+        syncing = false;
+        if (syncPending) syncTimer = setTimeout(() => useStore.getState().refreshDatabaseSync(), 200);
+      }
+    }, 350);
+  });
 }
 
 export const useStore = create((set, get) => ({
@@ -74,45 +67,72 @@ export const useStore = create((set, get) => ({
   toasts: [],
   pushToast(message, type = 'success') {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    set((s) => ({ toasts: [...s.toasts, { id, message, type }] }));
-    setTimeout(() => {
-      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-    }, 3500);
+    set((state) => ({ toasts: [...state.toasts, { id, message, type }] }));
+    setTimeout(() => set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) })), 3500);
   },
   dismissToast(id) {
-    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+    set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
   },
 
   ready: false,
+  dbReady: false,
 
-  /** Hydrate demo data + restore session. Call once from <App />. */
-  init() {
-    const snapshot = loadSnapshot();
-    set((s) => ({
-      ...demoData,
-      ...(snapshot ? snapshot : {}), // persisted demo data wins over seed data
-      toasts: s.toasts,
-    }));
-    get().initAuth(demoData.demoUsers);
-    get().checkLowStock();
-    get().persist();
-    set({ ready: true });
+  async init() {
+    if (initialized) return;
+    initialized = true;
+    try {
+      await get().initAuth();
+    } catch (error) {
+      get().pushToast(`Database connection failed: ${error.message}`, 'error');
+    } finally {
+      set({ ready: true });
+    }
   },
 
-  /** Persist domain slices (debounced) after every state change. */
-  persist() {
-    if (persistBound) return;
-    persistBound = true;
-    let pending = false;
-    const flush = () => {
-      pending = false;
-      if (!get().ready) return;
-      dumpSnapshot(get());
+  async loadWorkspace() {
+    const rows = await loadWorkspaceData();
+    const profile = get().profile;
+    const customer = rows.customers.find((item) => item.user_id === profile?.id);
+    const settings = {
+      id: rows.settings.id,
+      organizationName: rows.settings.organizationName ?? '',
+      enableCustomerOrders: rows.settings.enableCustomerOrders ?? false,
+      lowStockThresholdDefault: rows.settings.lowStockThresholdDefault ?? 0,
+      currency: rows.settings.currency ?? 'RWF',
+      ...rows.settings,
     };
-    useStore.subscribe(() => {
-      if (pending) return;
-      pending = true;
-      setTimeout(flush, 300);
+    set({ ...rows, settings, profile: { ...profile, customer_id: customer?.id ?? null } });
+    baseline = snapshot(get());
+    set({ dbReady: true });
+    bindDatabaseSync(get);
+    get().checkLowStock();
+  },
+
+  clearWorkspace() {
+    baseline = null;
+    set({
+      users: [], categories: [], seedClasses: [], varieties: [], products: [], warehouses: [], inventory: [], movements: [],
+      batches: [], stages: [], qualityChecks: [], customers: [], orders: [], sales: [], payments: [], expenses: [],
+      notifications: [], auditLogs: [], settings: {}, dbReady: false,
     });
+  },
+
+  refreshDatabaseSync() {
+    if (!syncPending || syncing || !baseline) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      const state = get();
+      if (!state.dbReady || !state.profile) return;
+      syncing = true;
+      syncPending = false;
+      const current = snapshot(state);
+      syncWorkspaceChanges(baseline, current).then(() => { baseline = current; }).catch((error) => {
+        state.pushToast(`Database save failed: ${error.message}`, 'error');
+        syncPending = true;
+      }).finally(() => {
+        syncing = false;
+        if (syncPending) state.refreshDatabaseSync();
+      });
+    }, 200);
   },
 }));

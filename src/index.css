@@ -25,3 +25,16 @@
 .sidebar-link { transition: all 0.2s; }
 .sidebar-link:hover { background: rgba(77,181,77,0.12); }
 .sidebar-link.active { background: linear-gradient(135deg, #2d9e2d, #1f7a1f); color: white; }
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body { background: #fff !important; color: #111 !important; }
+  body * { visibility: hidden !important; }
+  .report-print, .report-print *, .analytics-print, .analytics-print * { visibility: visible !important; }
+  .report-print, .analytics-print { position: absolute !important; inset: 0 auto auto 0 !important; width: 100% !important; padding: 0 !important; }
+  .no-print { display: none !important; }
+  .report-print section { break-inside: avoid; box-shadow: none !important; }
+  .report-print table { width: 100%; border-collapse: collapse; }
+  .report-print th, .report-print td { border-bottom: 1px solid #ddd; }
+  .report-print h1, .report-print h2, .report-print p, .report-print td, .report-print th { color: #111 !important; }
+}

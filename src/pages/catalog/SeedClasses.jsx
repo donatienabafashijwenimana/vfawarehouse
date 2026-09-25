@@ -4,7 +4,7 @@ export default function SeedClasses() {
   return (
     <CatalogPage
       title="Seed Class Management"
-      subtitle="Generation classes: Pre-basic, Basic, Certified (spec §11)"
+      subtitle="Generation classes: Pre-basic, Basic, Certified"
       entityKey="seedClasses"
       addKey="addSeedClass"
       updateKey="updateSeedClass"

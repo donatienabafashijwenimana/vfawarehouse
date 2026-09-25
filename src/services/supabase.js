@@ -6,10 +6,8 @@ export const supabaseConfigured = Boolean(url && anonKey);
 let clientPromise = null;
 
 /**
- * Lazily created Supabase client. The SDK is only downloaded (via dynamic
- * import) the first time it is actually used, so demo mode — the default —
- * never ships @supabase/supabase-js in the main bundle. Resolves null when
- * VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are not set.
+ * Lazily created Supabase client. The SDK is downloaded when the database is
+ * first used. Resolves null when the required environment variables are absent.
  */
 export function getSupabase() {
   if (!supabaseConfigured) return Promise.resolve(null);

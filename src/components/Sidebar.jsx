@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, ShieldCheck, Building2, Package, Leaf, Tags,
   Factory, ClipboardCheck, Warehouse, Boxes, ArrowLeftRight, ShoppingCart, Receipt,
-  CreditCard, Wallet, TrendingDown, BarChart3, Bell, ScrollText, Settings, LogOut, ChevronDown, ClipboardList,
+  CreditCard, Wallet, TrendingDown, BarChart3, Bell, ScrollText, Settings, LogOut, ChevronDown, ClipboardList, Archive,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { usePermissions } from '../hooks/usePermissions';
@@ -97,6 +97,7 @@ const NAV_GROUPS = [
     items: [
       { to: '/app/notifications', icon: Bell, label: 'Notifications', perm: null },
       { to: '/app/audit-logs', icon: ScrollText, label: 'Audit Logs', perm: 'audit_logs.view' },
+      { to: '/app/archive', icon: Archive, label: 'Archive', perm: 'archive.view' },
       { to: '/app/settings', icon: Settings, label: 'Settings', perm: 'settings.manage' },
     ],
   },

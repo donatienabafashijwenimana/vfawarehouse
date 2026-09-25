@@ -43,6 +43,7 @@ const Notifications = lazy(() => import('./pages/system/Notifications'));
 const AuditLogs = lazy(() => import('./pages/system/AuditLogs'));
 const Settings = lazy(() => import('./pages/system/Settings'));
 const Profile = lazy(() => import('./pages/system/Settings').then((m) => ({ default: m.Profile })));
+const Archive = lazy(() => import('./pages/system/Archive'));
 
 const PortalProducts = lazy(() => import('./pages/portal/PortalProducts'));
 
@@ -132,6 +133,9 @@ export default function App() {
             {/* System */}
             <Route path="/app/notifications" element={<Notifications />} />
             <Route path="/app/profile" element={<Profile />} />
+            <Route element={<ProtectedRoute permission="archive.view" />}>
+              <Route path="/app/archive" element={<Archive />} />
+            </Route>
             <Route element={<ProtectedRoute permission="audit_logs.view" />}>
               <Route path="/app/audit-logs" element={<AuditLogs />} />
             </Route>

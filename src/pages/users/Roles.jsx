@@ -22,7 +22,7 @@ export default function Roles() {
   const logAction = useStore((s) => s.logAction);
   const run = useAction();
 
-  // Roles are stored on demo users; edit the staff permission templates here.
+  // Staff permissions are stored on the database-backed profiles.
   const staffUser = users.find((u) => u.role === 'staff');
   const [perms, setPerms] = useState(staffUser?.permissions ?? []);
 
@@ -34,7 +34,7 @@ export default function Roles() {
 
   function save() {
     run(() => {
-      // Apply to all staff users (demo template behavior)
+      // Apply the selected permission set to all staff profiles.
       users.filter((u) => u.role === 'staff').forEach((u) => {
         useStore.setState((s) => ({
           users: s.users.map((x) => (x.id === u.id ? { ...x, permissions: perms } : x)),

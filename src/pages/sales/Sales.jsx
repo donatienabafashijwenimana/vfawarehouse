@@ -33,7 +33,7 @@ export default function Sales() {
     <div className="space-y-6">
       <PageHeader
         title={isCustomer ? 'My Invoices' : 'Sales Management'}
-        subtitle={isCustomer ? 'Review invoice totals, amounts paid, and balances due.' : 'Confirm a sale to decrease stock (spec §21, §36)'}
+        subtitle={isCustomer ? 'Review invoice totals, amounts paid, and balances due.' : 'Confirm a sale to update stock'}
         actions={!isCustomer && <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Sale</Button>}
       />
 
@@ -75,7 +75,7 @@ export default function Sales() {
         rows={rows}
         searchKeys={['invoice_number']}
         searchPlaceholder="Search invoice number…"
-        emptyHint={isCustomer ? 'No invoices yet. An invoice appears here after an order is delivered.' : 'No invoices match this filter.'}
+        emptyHint={isCustomer ? 'No invoices yet.' : 'No invoices match this filter.'}
         filters={
           <FilterSelect
             value={payStatusFilter}

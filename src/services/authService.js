@@ -1,139 +1,70 @@
 import { getSupabase, supabaseConfigured } from './supabase';
 
-const DEMO_USERS_KEY = 'vfa_demo_users';
-
-function readDemoUsers() {
-  try {
-    return JSON.parse(localStorage.getItem(DEMO_USERS_KEY) || 'null') || null;
-  } catch {
-    return null;
-  }
-}
-
-function writeDemoUsers(users) {
-  localStorage.setItem(DEMO_USERS_KEY, JSON.stringify(users));
-}
-
-/** Seed demo accounts (idempotent) used only when Supabase is not configured. */
-export function ensureDemoUsers(seedUsers) {
-  if (!readDemoUsers()) writeDemoUsers(seedUsers);
-  return readDemoUsers();
+async function requireSupabase() {
+  if (!supabaseConfigured) throw new Error('Sign-in is currently unavailable. Please contact an administrator.');
+  return getSupabase();
 }
 
 export async function signIn(email, password) {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    return { user: data.user, session: data.session };
-  }
-  // Demo auth
-  const users = readDemoUsers() || [];
-  const match = users.find(
-    (u) => u.email.toLowerCase() === String(email).toLowerCase() && u.password === password
-  );
-  if (!match) throw new Error('Invalid email or password');
-  const session = { user: { id: match.id, email: match.email }, demo: true };
-  localStorage.setItem('vfa_demo_session', JSON.stringify(session));
-  return { user: match, session };
+  const supabase = await requireSupabase();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return { user: data.user, session: data.session };
 }
 
 export async function signOut() {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    return supabase.auth.signOut();
-  }
-  localStorage.removeItem('vfa_demo_session');
+  const supabase = await requireSupabase();
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
 
 export async function getSession() {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const { data } = await supabase.auth.getSession();
-    return data.session;
-  }
-  try {
-    return JSON.parse(localStorage.getItem('vfa_demo_session') || 'null');
-  } catch {
-    return null;
-  }
+  if (!supabaseConfigured) return null;
+  const supabase = await getSupabase();
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return data.session;
 }
 
 export async function registerUser({ email, password, fullName }) {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } },
-    });
-    if (error) throw error;
-    return data;
+  const supabase = await requireSupabase();
+  const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+  if (error) throw error;
+  return data;
+}
+
+export async function createManagedUser({ fullName, email, password, role, status, permissions }) {
+  const supabase = await requireSupabase();
+  const { data, error } = await supabase.functions.invoke('create-managed-user', {
+    body: { fullName, email, password, role, status, permissions },
+  });
+  if (error) {
+    const response = error.context;
+    if (response instanceof Response) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error ?? error.message);
+    }
+    throw error;
   }
-  const users = readDemoUsers() || [];
-  if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-    throw new Error('An account with this email already exists');
-  }
-  const user = {
-    id: `u_${Date.now()}`,
-    email,
-    password,
-    fullName,
-    role: 'customer',
-    status: 'ACTIVE',
-    demo: true,
-  };
-  users.push(user);
-  writeDemoUsers(users);
-  const session = { user: { id: user.id, email }, demo: true };
-  localStorage.setItem('vfa_demo_session', JSON.stringify(session));
-  return { user };
+  return data.user;
 }
 
 export async function requestPasswordReset(email) {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) throw error;
-    return;
-  }
-  const users = readDemoUsers() || [];
-  const user = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-  if (!user) throw new Error('No account found with this email');
+  const supabase = await requireSupabase();
+  const { error } = await supabase.auth.resetPasswordForEmail(email);
+  if (error) throw error;
 }
 
 export async function updatePassword(newPassword) {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) throw error;
-    return;
-  }
-  const session = JSON.parse(localStorage.getItem('vfa_demo_session') || 'null');
-  if (!session) throw new Error('Not signed in');
-  const users = readDemoUsers() || [];
-  const user = users.find((u) => u.id === session.user.id);
-  if (user) {
-    user.password = newPassword;
-    writeDemoUsers(users);
-  }
+  const supabase = await requireSupabase();
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
 }
 
 export async function updateOwnProfile(fields) {
-  if (supabaseConfigured) {
-    const supabase = await getSupabase();
-    const session = await getSession();
-    const { error } = await supabase
-      .from('profiles')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', session.user.id);
-    if (error) throw error;
-    return;
-  }
-  const session = JSON.parse(localStorage.getItem('vfa_demo_session') || 'null');
-  if (!session) throw new Error('Not signed in');
-  const users = readDemoUsers() || [];
-  const user = users.find((u) => u.id === session.user.id);
-  if (user) Object.assign(user, fields);
-  writeDemoUsers(users);
+  const supabase = await requireSupabase();
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  const { error } = await supabase.from('profiles').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', user.id);
+  if (error) throw error;
 }

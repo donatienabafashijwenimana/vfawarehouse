@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CreditCard, CheckCircle2, XCircle } from 'lucide-react';
+import { CreditCard, CheckCircle2, XCircle, ExternalLink } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Select, Input, StatusBadge } from '../../components/ui/primitives';
@@ -46,7 +46,7 @@ export default function Payments() {
     <div className="space-y-6">
       <PageHeader
         title={isCustomer ? 'My Payments' : 'Payment Management'}
-        subtitle={isCustomer ? 'Track payments received and the balance remaining on your invoices.' : 'Record customer payments against invoices (spec §23)'}
+        subtitle={isCustomer ? 'Track payments received and the balance remaining on your invoices.' : 'Record customer payments against invoices'}
       />
 
       {isCustomer ? (
@@ -110,7 +110,7 @@ export default function Payments() {
             {pendingRequests.map((payment) => {
               const sale = store.sales.find((item) => item.id === payment.sale_id);
               return <div key={payment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-4 py-3">
-                <div><div className="font-semibold text-gray-700">{customerName(payment.customer_id)} · {sale?.invoice_number ?? payment.order_number ?? 'Payment request'}</div><div className="text-xs text-gray-500">{formatRWF(payment.amount)} · {payment.method} · {formatDate(payment.payment_date)}{payment.reference ? ` · ${payment.reference}` : ''}</div></div>
+                <div><div className="font-semibold text-gray-700">{customerName(payment.customer_id)} · {sale?.invoice_number ?? payment.order_number ?? 'Payment request'}</div><div className="text-xs text-gray-500">{formatRWF(payment.amount)} · {payment.method} · {formatDate(payment.payment_date)}{payment.reference ? ` · ${payment.reference}` : ''}</div>{payment.evidence && <EvidenceLink evidence={payment.evidence} label="View payment evidence" />}</div>
                 <div className="flex gap-2"><Button size="sm" onClick={() => run(() => store.confirmPaymentRequest(payment.id), 'Payment confirmed')}><CheckCircle2 className="h-3.5 w-3.5" /> Confirm</Button><Button size="sm" variant="secondary" onClick={() => run(() => store.rejectPaymentRequest(payment.id), 'Payment request rejected')}><XCircle className="h-3.5 w-3.5" /> Reject</Button></div>
               </div>;
             })}
@@ -131,12 +131,13 @@ export default function Payments() {
           { key: 'method', label: 'Method' },
           { key: 'status', label: 'Confirmation', render: (p) => <StatusBadge status={p.status ?? 'CONFIRMED'} /> },
           { key: 'reference', label: 'Reference', render: (p) => <span className="text-xs text-gray-400">{p.reference || '—'}</span> },
+          { key: 'evidence', label: 'Evidence', sortable: false, render: (p) => p.evidence ? <EvidenceLink evidence={p.evidence} label="View evidence" /> : <span className="text-xs text-gray-400">—</span> },
           { key: 'recorded_by', label: 'Recorded by', render: (p) => <span className="text-gray-500">{p.recorded_by}</span> },
         ].filter(Boolean)}
         rows={rows}
         searchKeys={['reference', 'recorded_by', 'method', (payment) => store.sales.find((sale) => sale.id === payment.sale_id)?.invoice_number ?? payment.order_number]}
         searchPlaceholder="Search invoice or payment reference…"
-        emptyHint={isCustomer ? 'No payments recorded yet. Payments appear here after they are added to an invoice.' : 'No payments match this filter.'}
+        emptyHint={isCustomer ? 'No payments recorded yet.' : 'No payments match this filter.'}
         filters={
           <FilterSelect
             value={methodFilter}
@@ -158,6 +159,7 @@ export default function Payments() {
             method: data.method,
             reference: data.reference,
             payment_date: data.payment_date,
+            evidence: data.evidence,
           }), 'Payment recorded');
           setPayModal(null);
         }}
@@ -167,7 +169,7 @@ export default function Payments() {
         sale={requestSale}
         onClose={() => setRequestSale(null)}
         onSubmit={(data) => {
-          run(() => store.requestPayment({ sale_id: requestSale.id, amount: Number(data.amount), method: data.method, reference: data.reference, payment_date: data.payment_date }), 'Payment details submitted — awaiting manager confirmation');
+          run(() => store.requestPayment({ sale_id: requestSale.id, amount: Number(data.amount), method: data.method, reference: data.reference, payment_date: data.payment_date, evidence: data.evidence }), 'Payment claim submitted — awaiting manager confirmation');
           setRequestSale(null);
         }}
       />
@@ -181,8 +183,10 @@ function PayModal({ sale, onClose, onSubmit }) {
     method: 'Cash',
     reference: '',
     payment_date: new Date().toISOString().slice(0, 10),
+    evidence: null,
   });
   const [amountWarning, setAmountWarning] = useState(false);
+  const [fileError, setFileError] = useState('');
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   if (!sale) return null;
@@ -208,9 +212,24 @@ function PayModal({ sale, onClose, onSubmit }) {
           <Input label="Payment date" type="date" value={form.payment_date} onChange={set('payment_date')} required />
         </div>
         <Input label="Reference (optional)" value={form.reference} onChange={set('reference')} placeholder="MOMO ref, bank slip…" />
+        <label className="block text-sm font-medium text-gray-700">Payment evidence <span className="text-red-600">*</span> <span className="font-normal text-gray-400">(image or PDF, up to 5 MB)</span>
+          <input className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm" type="file" accept="image/*,application/pdf" required onChange={(event) => {
+            const file = event.target.files?.[0];
+            setFileError('');
+            if (!file) return;
+            if (!(file.type.startsWith('image/') || file.type === 'application/pdf')) { setFileError('Choose an image or PDF file.'); event.target.value = ''; return; }
+            if (file.size > 5 * 1024 * 1024) { setFileError('Choose a file smaller than 5 MB.'); event.target.value = ''; return; }
+            const reader = new FileReader();
+            reader.onload = () => setForm((current) => ({ ...current, evidence: { name: file.name, type: file.type, data: reader.result } }));
+            reader.onerror = () => setFileError('The selected file could not be read.');
+            reader.readAsDataURL(file);
+          }} />
+        </label>
+        {fileError && <p role="alert" className="text-sm text-red-600">{fileError}</p>}
+        {form.evidence && <p className="text-xs text-gray-500">Attached: {form.evidence.name}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > outstanding}><CreditCard className="h-4 w-4" /> Record Payment</Button>
+          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > outstanding || !form.evidence || Boolean(fileError)}><CreditCard className="h-4 w-4" /> Record Payment</Button>
         </div>
       </form>
     </Modal>
@@ -218,8 +237,9 @@ function PayModal({ sale, onClose, onSubmit }) {
 }
 
 function RequestPaymentModal({ sale, onClose, onSubmit }) {
-  const [form, setForm] = useState({ amount: '', method: 'Cash', reference: '', payment_date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ amount: '', method: 'Cash', reference: '', payment_date: new Date().toISOString().slice(0, 10), evidence: null });
   const [warning, setWarning] = useState(false);
+  const [fileError, setFileError] = useState('');
   if (!sale) return null;
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   const setAmount = (event) => {
@@ -230,7 +250,7 @@ function RequestPaymentModal({ sale, onClose, onSubmit }) {
   return (
     <Modal open onClose={onClose} title={`Submit payment — ${sale.invoice_number}`}>
       <form onSubmit={(event) => { event.preventDefault(); onSubmit(form); }} className="space-y-4">
-        <p className="text-sm text-gray-600">Enter details of the payment you have already made. A manager must confirm it before it changes your invoice balance.</p>
+        <p className="text-sm text-gray-600">Claim a payment you have already made. Attach a receipt or transaction screenshot. A manager must confirm your claim before it changes your invoice balance.</p>
         <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600">Maximum requestable amount: <strong>{formatRWF(sale.requestable)}</strong></div>
         <Input label="Amount paid (RWF)" type="number" min="1" step="0.01" max={sale.requestable} value={form.amount} onChange={setAmount} aria-invalid={warning} required />
         {warning && <p role="alert" className="text-sm font-medium text-red-600">Request cannot exceed {formatRWF(sale.requestable)}.</p>}
@@ -241,11 +261,33 @@ function RequestPaymentModal({ sale, onClose, onSubmit }) {
           <Input label="Payment date" type="date" value={form.payment_date} onChange={set('payment_date')} required />
         </div>
         <Input label="Reference" value={form.reference} onChange={set('reference')} placeholder="Transaction or bank reference" required />
+        <label className="block text-sm font-medium text-gray-700">Payment evidence <span className="text-red-600">*</span> <span className="font-normal text-gray-400">(image or PDF, up to 5 MB)</span>
+          <input className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm" type="file" accept="image/*,application/pdf" onChange={(event) => {
+            const file = event.target.files?.[0];
+            setFileError('');
+            if (!file) return;
+            if (!(file.type.startsWith('image/') || file.type === 'application/pdf')) { setFileError('Choose an image or PDF file.'); event.target.value = ''; return; }
+            if (file.size > 5 * 1024 * 1024) { setFileError('Choose a file smaller than 5 MB.'); event.target.value = ''; return; }
+            const reader = new FileReader();
+            reader.onload = () => setForm((current) => ({ ...current, evidence: { name: file.name, type: file.type, data: reader.result } }));
+            reader.onerror = () => setFileError('The selected file could not be read.');
+            reader.readAsDataURL(file);
+          }} />
+        </label>
+        {fileError && <p role="alert" className="text-sm text-red-600">{fileError}</p>}
+        {form.evidence && <p className="text-xs text-gray-500">Attached: {form.evidence.name}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > sale.requestable || !form.reference.trim()}>Submit for confirmation</Button>
+          <Button type="submit" disabled={!Number(form.amount) || Number(form.amount) > sale.requestable || !form.reference.trim() || !form.evidence || Boolean(fileError)}>Submit payment claim</Button>
         </div>
       </form>
     </Modal>
   );
+}
+
+function EvidenceLink({ evidence, label }) {
+  const href = typeof evidence === 'string' ? evidence : evidence?.data ?? evidence?.url;
+  const name = label ?? (typeof evidence === 'string' ? 'View evidence' : evidence?.name ?? 'View evidence');
+  if (!href) return null;
+  return <a className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-800" href={href} target="_blank" rel="noreferrer"><ExternalLink className="h-3 w-3" />{name}</a>;
 }

@@ -38,7 +38,7 @@ export default function Quality() {
     <div className="space-y-6">
       <PageHeader
         title="Quality Control"
-        subtitle="Inspect completed batches — only approved seed becomes sellable stock (spec §16)"
+        subtitle="Inspect completed batches before seed is added to sellable stock"
         actions={completedBatches.length > 0 && (
           <Button onClick={() => setModal({ batch: completedBatches[0] })}>
             <ShieldCheck className="h-4 w-4" /> Inspect next batch

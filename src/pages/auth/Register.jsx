@@ -1,15 +1,14 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
-import { DEMO_MODE } from '../../services/api';
 import AuthLayout, { AuthCardHeader } from '../../components/AuthLayout';
 
 export default function Register() {
   const [form, setForm] = useState({ fullName: '', email: '', password: '', confirm: '' });
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const registerUser = useStore((s) => s.registerUser);
-  const navigate = useNavigate();
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -21,7 +20,7 @@ export default function Register() {
     setLoading(true);
     try {
       await registerUser({ fullName: form.fullName, email: form.email, password: form.password });
-      navigate('/app');
+      setSuccess('Check your email and verify your address. After verification, a manager will confirm your customer account before you can sign in.');
     } catch (err) {
       setError(err?.message ?? 'Registration failed');
     } finally {
@@ -31,7 +30,7 @@ export default function Register() {
 
   return (
     <AuthLayout>
-          <AuthCardHeader title="Create Account" subtitle="Register as a customer to order certified seed" badge={DEMO_MODE ? 'Demo mode — account stored locally' : null} />
+          <AuthCardHeader title="Create Account" subtitle="Register as a customer to order certified seed" />
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <label className="block">
@@ -58,6 +57,7 @@ export default function Register() {
             </div>
 
             {error && <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-2.5 text-sm text-red-600">{error}</div>}
+            {success && <div role="status" className="rounded-xl border border-green-100 bg-green-50 px-4 py-2.5 text-sm text-green-700">{success}</div>}
 
             <button type="submit" disabled={loading}
               className="w-full rounded-xl py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-70"

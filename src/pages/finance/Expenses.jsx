@@ -8,12 +8,12 @@ import { PageHeader, KPICard } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
 import { formatDate, formatRWF } from '../../lib/format';
-import { EXPENSE_CATEGORIES } from '../../store/slices/financeSlice';
 
-const EMPTY = { category: 'Production costs', description: '', amount: '', expense_date: '', payment_method: 'Cash' };
+const EMPTY = { category: '', description: '', amount: '', expense_date: '', payment_method: 'Cash' };
 
 export default function Expenses() {
   const expenses = useStore((s) => s.expenses);
+  const expenseCategories = [...new Set(expenses.map((expense) => expense.category).filter(Boolean))].sort();
   const addExpense = useStore((s) => s.addExpense);
   const updateExpense = useStore((s) => s.updateExpense);
   const deleteExpense = useStore((s) => s.deleteExpense);
@@ -39,7 +39,7 @@ export default function Expenses() {
     <div className="space-y-6">
       <PageHeader
         title="Expense Management"
-        subtitle="Operational expenses: production, packaging, transport, labor (spec §24)"
+        subtitle="Track production, packaging, transport, labor, and other operating costs"
         actions={<Button onClick={() => setModal({ mode: 'create' })}><Plus className="h-4 w-4" /> Add Expense</Button>}
       />
 
@@ -71,7 +71,7 @@ export default function Expenses() {
             value={categoryFilter}
             onChange={setCategoryFilter}
             placeholder="All categories"
-            options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c }))}
+            options={expenseCategories.map((category) => ({ value: category, label: category }))}
           />
         }
         pageSize={8}
@@ -94,9 +94,7 @@ function ExpenseModal({ modal, onClose, onSave }) {
     <Modal open={!!modal} onClose={onClose} title={modal?.mode === 'edit' ? 'Edit Expense' : 'Add Expense'}>
       <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <Select label="Category" value={form.category} onChange={set('category')} required>
-            {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </Select>
+          <Input label="Category" value={form.category} onChange={set('category')} placeholder="Enter an expense category" required />
           <Input label="Date" type="date" value={form.expense_date} onChange={set('expense_date')} required />
         </div>
         <Input label="Description" value={form.description} onChange={set('description')} required />

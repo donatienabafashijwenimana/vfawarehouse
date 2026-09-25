@@ -1,27 +1,15 @@
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `id_${Date.now()}_${Math.random()}`);
 const nowISO = () => new Date().toISOString();
 
-export const EXPENSE_CATEGORIES = [
-  'Production costs',
-  'Packaging',
-  'Transport',
-  'Labor',
-  'Utilities',
-  'Maintenance',
-  'Equipment',
-  'Other',
-];
-
 /** Finance slice (spec §24–25): expenses + income aggregates. */
 export const financeSlice = (set, get) => ({
   expenses: [],
-  expenseCategoryList: EXPENSE_CATEGORIES,
 
   addExpense(row) {
     const amount = Number(row.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new Error('Expense amount must be positive');
     set((s) => ({
-      expenses: [{ ...row, amount, id: uid(), recorded_by: get().profile?.fullName ?? '—', created_at: nowISO() }, ...s.expenses],
+      expenses: [{ ...row, amount, id: uid(), recorded_by: get().profile?.fullName ?? '—', recorded_by_id: get().profile?.id, created_at: nowISO() }, ...s.expenses],
     }));
     get().logAction(`Expense recorded: ${row.description} (${amount} RWF)`, 'Expenses');
   },

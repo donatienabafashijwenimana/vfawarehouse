@@ -1,6 +1,7 @@
 import { availableQty } from '../../lib/calc';
 
 const nowISO = () => new Date().toISOString();
+const uid = () => crypto.randomUUID();
 
 /**
  * System slice (spec §28, §29, §41): audit logs, notifications, settings.
@@ -8,19 +9,15 @@ const nowISO = () => new Date().toISOString();
 export const systemSlice = (set, get) => ({
   auditLogs: [],
   notifications: [],
-  settings: {
-    organizationName: 'VFA Greenhouse Seeds Hub Ltd',
-    enableCustomerOrders: true,
-    lowStockThresholdDefault: 100,
-    currency: 'RWF',
-  },
+  settings: {},
 
   // ---- Audit logs (§28) ----
   logAction(description, module) {
     set((s) => ({
       auditLogs: [
         {
-          id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: uid(),
+          user_id: get().profile?.id,
           user: get().profile?.fullName ?? 'system',
           role: get().profile?.role ?? '—',
           action: description,
@@ -36,7 +33,7 @@ export const systemSlice = (set, get) => ({
   pushNotification(type, title, message) {
     set((s) => ({
       notifications: [
-        { id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, type, title, message, read: false, created_at: nowISO() },
+        { id: uid(), user_id: get().profile?.id, type, title, message, read: false, created_at: nowISO() },
         ...s.notifications,
       ],
     }));
@@ -50,7 +47,7 @@ export const systemSlice = (set, get) => ({
 
   // ---- Settings ----
   updateSettings(fields) {
-    set((s) => ({ settings: { ...s.settings, ...fields } }));
+    set((s) => ({ settings: { ...s.settings, id: s.settings.id ?? uid(), ...fields } }));
     get().logAction('Updated system settings', 'Settings');
   },
 
@@ -75,4 +72,3 @@ export const systemSlice = (set, get) => ({
     }
   },
 });
-

@@ -22,7 +22,7 @@ export default function Notifications() {
     <div className="space-y-6">
       <PageHeader
         title="Notifications"
-        subtitle="Low stock, orders, quality checks, payments and account events (spec §29)"
+        subtitle="Updates about stock, orders, quality checks, payments, and accounts"
         actions={unread > 0 && (
           <Button variant="secondary" onClick={markAllNotificationsRead}>
             <CheckCheck className="h-4 w-4" /> Mark all read ({unread})

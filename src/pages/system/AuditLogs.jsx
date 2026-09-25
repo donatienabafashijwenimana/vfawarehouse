@@ -16,7 +16,7 @@ export default function AuditLogs() {
     <div className="space-y-6">
       <PageHeader
         title="Audit Logs"
-        subtitle="Every important action recorded with user, module and timestamp (spec §28)"
+        subtitle="Review important actions by user, area, and time"
       />
 
       <DataTable

@@ -1,5 +1,6 @@
 import { productionEfficiency } from '../../lib/calc';
-import { DEFAULT_STAGES } from '../demoData';
+
+const DEFAULT_STAGES = ['Land preparation', 'Planting', 'Crop management', 'Harvesting', 'Sorting and grading', 'Packaging'];
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `id_${Date.now()}_${Math.random()}`);
 const nowISO = () => new Date().toISOString();
@@ -133,7 +134,7 @@ export const productionSlice = (set, get) => ({
   },
 
   addQualityCheck(row) {
-    const qc = { ...row, id: uid(), inspector: get().profile?.fullName ?? 'Unknown', created_at: nowISO() };
+    const qc = { ...row, id: uid(), inspector: get().profile?.fullName ?? 'Unknown', inspector_id: get().profile?.id, created_at: nowISO() };
     set((s) => ({ qualityChecks: [qc, ...s.qualityChecks] }));
     get().updateBatch(qc.batch_id, { quality_status: qc.status });
     if (qc.status === 'APPROVED') get().updateBatch(qc.batch_id, { approved: true });

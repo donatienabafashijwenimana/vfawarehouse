@@ -64,8 +64,7 @@ create table if not exists profiles (
   email text not null,
   phone text,
   role user_role not null default 'customer',
-  status text not null default 'PENDING' check (status in ('ACTIVE', 'INACTIVE', 'PENDING')),
-  email_verified boolean not null default false,
+  status text not null default 'ACTIVE' check (status in ('ACTIVE', 'INACTIVE')),
   permissions text[] not null default '{}',
   registered date not null default current_date,
   created_at timestamptz not null default now(),
@@ -214,10 +213,6 @@ create table if not exists customers (
   created_at timestamptz not null default now()
 );
 
-create unique index if not exists customers_email_unique_idx
-  on customers (lower(btrim(email)))
-  where email is not null and btrim(email) <> '';
-
 create table if not exists orders (
   id uuid primary key default gen_random_uuid(),
   order_number text unique not null,
@@ -343,16 +338,6 @@ create table if not exists audit_logs (
   created_at timestamptz not null default now()
 );
 
-create table if not exists email_notification_events (
-  event_key text primary key,
-  recipient text not null,
-  provider_id text,
-  created_at timestamptz not null default now(),
-  sent_at timestamptz
-);
-revoke all on email_notification_events from anon, authenticated;
-grant all on email_notification_events to service_role;
-
 create table if not exists settings (
   id uuid primary key default gen_random_uuid(),
   data jsonb not null default '{}'::jsonb,
@@ -381,12 +366,12 @@ create table if not exists archive_files (
 -- ============================================================
 create or replace function current_role_name()
 returns user_role language sql stable security definer set search_path = public as $$
-  select role from profiles where id = auth.uid() and status = 'ACTIVE' and email_verified;
+  select role from profiles where id = auth.uid();
 $$;
 
 create or replace function current_permissions()
 returns text[] language sql stable security definer set search_path = public as $$
-  select coalesce(permissions, '{}'::text[]) from profiles where id = auth.uid() and status = 'ACTIVE' and email_verified;
+  select coalesce(permissions, '{}'::text[]) from profiles where id = auth.uid();
 $$;
 
 create or replace function is_manager()
@@ -402,11 +387,11 @@ $$;
 create or replace function has_perm(p_code text)
 returns boolean language sql stable security definer set search_path = public as $$
   select coalesce(
-    (select role = 'manager' and status = 'ACTIVE' and email_verified from profiles where id = auth.uid()),
+    (select role = 'manager' from profiles where id = auth.uid()),
     false
   ) or p_code = any (
     coalesce(
-      (select permissions from profiles where id = auth.uid() and status = 'ACTIVE' and email_verified),
+      (select permissions from profiles where id = auth.uid()),
       '{}'::text[]
     )
   );
@@ -418,55 +403,16 @@ $$;
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  if new.email_confirmed_at is null then
-    return new;
-  end if;
-
-  insert into public.profiles (id, full_name, email, role, status, email_verified)
+  insert into public.profiles (id, full_name, email, role)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'full_name', new.email),
     new.email,
-    'customer',
-    'PENDING',
-    true
+    'customer'
   );
-  insert into public.customers (name, email, user_id)
-  values (coalesce(new.raw_user_meta_data->>'full_name', new.email), new.email, new.id)
-  on conflict do nothing;
   return new;
 end;
 $$;
-
-create or replace function handle_user_email_verified()
-returns trigger language plpgsql security definer set search_path = public as $$
-begin
-  if old.email_confirmed_at is null and new.email_confirmed_at is not null then
-    insert into public.profiles (id, full_name, email, role, status, email_verified)
-    values (
-      new.id,
-      coalesce(new.raw_user_meta_data->>'full_name', new.email),
-      new.email,
-      'customer',
-      'PENDING',
-      true
-    )
-    on conflict (id) do update
-      set email = excluded.email, email_verified = true, updated_at = now();
-    insert into public.customers (name, email, user_id)
-    select p.full_name, new.email, new.id
-    from public.profiles p
-    where p.id = new.id and p.role = 'customer'
-      and not exists (select 1 from public.customers c where c.user_id = new.id);
-  end if;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_email_verified on auth.users;
-create trigger on_auth_user_email_verified
-  after update of email_confirmed_at on auth.users
-  for each row execute function handle_user_email_verified();
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -496,7 +442,6 @@ alter table payments enable row level security;
 alter table expenses enable row level security;
 alter table notifications enable row level security;
 alter table audit_logs enable row level security;
-alter table email_notification_events enable row level security;
 alter table settings enable row level security;
 alter table archive_files enable row level security;
 alter table roles enable row level security;
@@ -632,15 +577,12 @@ create policy movements_insert on stock_movements for insert with check (
 -- Customers: staff read; customers read only their own linked record
 drop policy if exists customers_select on customers;
 create policy customers_select on customers for select using (
-  is_staff_or_manager() or (current_role_name() = 'customer' and user_id = auth.uid())
+  is_staff_or_manager() or user_id = auth.uid()
 );
 drop policy if exists customers_write on customers;
-create policy customers_insert on customers for insert with check (has_perm('customers.create'));
-create policy customers_update on customers for update using (
-  has_perm('customers.update')
-) with check (has_perm('customers.update'));
-drop policy if exists customers_delete on customers;
-create policy customers_delete on customers for delete using (has_perm('customers.delete'));
+create policy customers_write on customers for all using (
+  has_perm('customers.create') or has_perm('customers.update')
+) with check (has_perm('customers.create') or has_perm('customers.update'));
 
 -- Orders: staff manage; customers see own
 drop policy if exists orders_select on orders;
@@ -648,7 +590,7 @@ create policy orders_select on orders for select using (
   is_staff_or_manager()
   or exists (
     select 1 from customers c
-    where current_role_name() = 'customer' and c.user_id = auth.uid() and c.id = orders.customer_id
+    where c.user_id = auth.uid() and c.id = orders.customer_id
   )
 );
 drop policy if exists orders_insert on orders;
@@ -656,7 +598,7 @@ create policy orders_insert on orders for insert with check (
   is_staff_or_manager()
   or exists (
     select 1 from customers c
-    where current_role_name() = 'customer' and c.user_id = auth.uid() and c.id = orders.customer_id
+    where c.user_id = auth.uid() and c.id = orders.customer_id
   )
 );
 drop policy if exists orders_update on orders;
@@ -667,7 +609,7 @@ create policy orderitems_select on order_items for select using (
   is_staff_or_manager()
   or exists (
     select 1 from orders o join customers c on c.id = o.customer_id
-    where current_role_name() = 'customer' and o.id = order_items.order_id and c.user_id = auth.uid()
+    where o.id = order_items.order_id and c.user_id = auth.uid()
   )
 );
 drop policy if exists orderitems_write on order_items;
@@ -679,7 +621,7 @@ drop policy if exists sales_select on sales;
 create policy sales_select on sales for select using (
   is_staff_or_manager()
   or exists (
-    select 1 from customers c where current_role_name() = 'customer' and c.user_id = auth.uid() and c.id = sales.customer_id
+    select 1 from customers c where c.user_id = auth.uid() and c.id = sales.customer_id
   )
 );
 drop policy if exists sales_write on sales;
@@ -691,7 +633,7 @@ create policy saleitems_select on sale_items for select using (
   is_staff_or_manager()
   or exists (
     select 1 from sales s join customers c on c.id = s.customer_id
-    where current_role_name() = 'customer' and s.id = sale_items.sale_id and c.user_id = auth.uid()
+    where s.id = sale_items.sale_id and c.user_id = auth.uid()
   )
 );
 drop policy if exists saleitems_write on sale_items;
@@ -703,7 +645,7 @@ drop policy if exists payments_select on payments;
 create policy payments_select on payments for select using (
   is_staff_or_manager()
   or exists (
-    select 1 from customers c where current_role_name() = 'customer' and c.user_id = auth.uid() and c.id = payments.customer_id
+    select 1 from customers c where c.user_id = auth.uid() and c.id = payments.customer_id
   )
 );
 drop policy if exists payments_write on payments;
@@ -713,7 +655,7 @@ drop policy if exists payments_customer_claim on payments;
 create policy payments_customer_claim on payments for insert with check (
   status = 'PENDING'
   and exists (
-    select 1 from customers c where current_role_name() = 'customer' and c.user_id = auth.uid() and c.id = payments.customer_id
+    select 1 from customers c where c.user_id = auth.uid() and c.id = payments.customer_id
   )
 );
 

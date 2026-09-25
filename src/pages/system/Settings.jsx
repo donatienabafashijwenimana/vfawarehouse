@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Save, KeyRound } from 'lucide-react';
 import { useStore } from '../../store/useStore';
-import { Button, Input, Badge } from '../../components/ui/primitives';
+import { Button, Input } from '../../components/ui/primitives';
 import { PageHeader } from '../../components/ui/KPICard';
 import { useAction } from '../../hooks/useAction';
-import { DEMO_MODE } from '../../services/api';
 
 export default function Settings() {
   const settings = useStore((s) => s.settings);
@@ -15,7 +14,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="System Settings" subtitle="Organization configuration (spec §21 module, §41)" />
+      <PageHeader title="System Settings" subtitle="Organization configuration" />
 
       <div className="max-w-2xl space-y-6">
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -44,18 +43,6 @@ export default function Settings() {
               </Button>
             </div>
           </div>
-        </div>
-
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <h3 className="mb-2 font-semibold text-gray-700">Database connection</h3>
-          <p className="text-sm text-gray-500">
-            {DEMO_MODE
-              ? 'Running in demo mode with local data. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env and run supabase/schema.sql to go live.'
-              : 'Connected to Supabase. Data is protected by Row Level Security.'}
-          </p>
-          <Badge color={DEMO_MODE ? 'yellow' : 'green'} className="mt-3">
-            {DEMO_MODE ? 'Demo mode' : 'Supabase connected'}
-          </Badge>
         </div>
       </div>
     </div>

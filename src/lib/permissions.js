@@ -50,6 +50,8 @@ export const PERMISSIONS = {
   EXPENSES_UPDATE: 'expenses.update',
   EXPENSES_DELETE: 'expenses.delete',
   REPORTS_VIEW: 'reports.view',
+  ARCHIVE_VIEW: 'archive.view',
+  ARCHIVE_MANAGE: 'archive.manage',
   AUDIT_LOGS_VIEW: 'audit_logs.view',
   SETTINGS_MANAGE: 'settings.manage',
 };

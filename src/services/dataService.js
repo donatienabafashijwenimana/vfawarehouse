@@ -1,5 +1,5 @@
-// Supabase CRUD for all tables. Used only when Supabase is configured;
-// demo mode keeps data in the Zustand store (src/store).
+// Supabase CRUD for application tables. The Zustand store is hydrated from
+// these queries after authentication and is not a persistent data store.
 import { getSupabase } from './supabase';
 
 async function list(table, select = '*', order = { column: 'created_at', ascending: false }) {
@@ -112,7 +112,7 @@ export const inventoryApi = {
     list(
       'inventory',
       '*, product:products(name), batch:production_batches(batch_number), warehouse:warehouses(name)',
-      { column: 'created_at', ascending: false }
+      { column: 'updated_at', ascending: false }
     ),
   adjust: async (payload) => {
     const supabase = await getSupabase();
@@ -156,7 +156,7 @@ export const salesApi = {
   list: () =>
     list(
       'sales',
-      '*, customer:customers(name), items:sale_items(*, product:products(name)), created_by_profile:profiles(full_name)',
+      '*, customer:customers(name), order:orders(order_number), items:sale_items(*, product:products(name)), created_by_profile:profiles(full_name)',
       { column: 'created_at', ascending: false }
     ),
   create: async (payload) => {
@@ -170,7 +170,7 @@ export const paymentsApi = {
   list: () =>
     list(
       'payments',
-      '*, customer:customers(name), sale:sales(invoice_number)',
+      '*, customer:customers(name), sale:sales(invoice_number), order:orders(order_number)',
       { column: 'created_at', ascending: false }
     ),
   create: (row) => insert('payments', row),
@@ -187,7 +187,7 @@ export const expensesApi = {
   list: () =>
     list(
       'expenses',
-      '*, category:expense_categories(name), recorded_by_profile:profiles(full_name)',
+      '*, recorded_by_profile:profiles(full_name)',
       { column: 'expense_date', ascending: false }
     ),
   create: (row) => insert('expenses', row),
@@ -197,9 +197,20 @@ export const expensesApi = {
 
 // System ----------------------------------------------------------------
 export const usersApi = {
-  list: () =>
-    list('profiles', '*, role:roles(name)', { column: 'created_at', ascending: false }),
+  list: () => list('profiles', '*', { column: 'created_at', ascending: false }),
+  get: (id) => (async () => {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', id).single();
+    if (error) throw error;
+    return data;
+  })(),
   update: (id, f) => update('profiles', id, f),
+};
+
+export const qualityChecksApi = {
+  list: () => list('quality_checks', '*, inspector_profile:profiles(full_name)', { column: 'created_at', ascending: false }),
+  create: (row) => insert('quality_checks', row),
+  update: (id, f) => update('quality_checks', id, f),
 };
 
 export const rolesApi = {
@@ -229,7 +240,7 @@ export const auditLogsApi = {
   list: () =>
     list(
       'audit_logs',
-      '*, user:profiles(full_name)',
+      '*, user_profile:profiles(full_name)',
       { column: 'created_at', ascending: false }
     ),
 };

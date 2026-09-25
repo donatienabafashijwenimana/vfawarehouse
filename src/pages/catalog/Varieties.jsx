@@ -4,7 +4,7 @@ export default function Varieties() {
   return (
     <CatalogPage
       title="Seed Variety Management"
-      subtitle="Irish potato varieties produced by VFA (spec §10)"
+      subtitle="Irish potato varieties produced by VFA"
       entityKey="varieties"
       addKey="addVariety"
       updateKey="updateVariety"

@@ -42,7 +42,7 @@ export default function Production() {
     <div className="space-y-6">
       <PageHeader
         title="Production Batches"
-        subtitle="Plan, track and complete seed production (spec §12–13)"
+        subtitle="Plan, track, and complete seed production"
         actions={<Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Batch</Button>}
       />
 
