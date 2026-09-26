@@ -587,7 +587,9 @@ create policy batches_update on production_batches for update using (
   has_perm('production.update')
 );
 drop policy if exists batches_delete on production_batches;
-create policy batches_delete on production_batches for delete using (is_manager());
+create policy batches_delete on production_batches for delete using (
+  is_manager() or has_perm('production.delete')
+);
 
 drop policy if exists stages_select on production_stages;
 create policy stages_select on production_stages for select using (

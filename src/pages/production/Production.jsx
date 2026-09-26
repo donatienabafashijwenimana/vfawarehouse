@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, XCircle, CheckCircle2 } from 'lucide-react';
+import { Plus, Play, XCircle, CheckCircle2, Trash2 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, Textarea, StatusBadge } from '../../components/ui/primitives';
-import { Modal } from '../../components/ui/Modal';
+import { ConfirmDialog, Modal } from '../../components/ui/Modal';
 import { PageHeader, KPICard } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
+import { usePermissions } from '../../hooks/usePermissions';
 import { formatDate, formatNumber, prettyLabel } from '../../lib/format';
 import { productionEfficiency } from '../../lib/calc';
 
@@ -20,11 +21,15 @@ export default function Production() {
   const seedClasses = useStore((s) => s.seedClasses);
   const startBatch = useStore((s) => s.startBatch);
   const cancelBatch = useStore((s) => s.cancelBatch);
+  const deleteBatch = useStore((s) => s.deleteBatch);
+  const inventory = useStore((s) => s.inventory);
   const run = useAction();
+  const { can } = usePermissions();
   const navigate = useNavigate();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [complete, setComplete] = useState(null); // batch being completed
+  const [batchToDelete, setBatchToDelete] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
 
   const nameOf = (list, id) => list.find((x) => x.id === id)?.name ?? '—';
@@ -96,6 +101,17 @@ export default function Production() {
                   <XCircle className="h-3.5 w-3.5" />
                 </Button>
               )}
+              {can('production.delete') && b.status !== 'COMPLETED' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={inventory.some((row) => row.batch_id === b.id)}
+                  title={inventory.some((row) => row.batch_id === b.id) ? 'Remove or reassign this batch’s inventory first' : 'Delete batch'}
+                  onClick={() => setBatchToDelete(b)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                </Button>
+              )}
             </div>
           )},
         ]}
@@ -115,6 +131,18 @@ export default function Production() {
 
       <CreateBatchModal open={createOpen} onClose={() => setCreateOpen(false)} products={products} varieties={varieties} seedClasses={seedClasses} />
       <CompleteBatchModal batch={complete} onClose={() => setComplete(null)} />
+      <ConfirmDialog
+        open={!!batchToDelete}
+        onClose={() => setBatchToDelete(null)}
+        title="Delete production batch"
+        message={`Delete batch ${batchToDelete?.batch_number ?? ''}? Its production stages and quality checks will also be removed.`}
+        confirmLabel="Delete batch"
+        danger
+        onConfirm={() => {
+          if (batchToDelete) run(() => deleteBatch(batchToDelete.id), 'Batch deleted');
+          setBatchToDelete(null);
+        }}
+      />
     </div>
   );
 }

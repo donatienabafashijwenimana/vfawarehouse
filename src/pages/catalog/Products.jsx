@@ -86,6 +86,7 @@ export default function Products() {
       />
 
       <ProductModal
+        key={modal ? `${modal.mode}:${modal.product?.id ?? 'new'}` : 'closed'}
         modal={modal}
         onClose={() => setModal(null)}
         onSave={save}
