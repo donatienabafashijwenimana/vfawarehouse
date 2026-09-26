@@ -49,6 +49,7 @@ const NAV_GROUPS = [
         children: [
           { to: '/app/inventory/stock-in', label: 'Stock In' },
           { to: '/app/inventory/stock-out', label: 'Stock Out' },
+          { to: '/app/inventory/transferred', label: 'Transferred' },
           { to: '/app/inventory/current-stock', label: 'Current Available Stock' },
         ],
       },

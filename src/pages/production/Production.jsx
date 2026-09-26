@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, XCircle, CheckCircle2, Trash2 } from 'lucide-react';
+import { Plus, Play, XCircle, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
+import { PRODUCTION_STATUSES, QUALITY_STATUSES } from '../../store/slices/productionSlice';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, Textarea, StatusBadge } from '../../components/ui/primitives';
 import { ConfirmDialog, Modal } from '../../components/ui/Modal';
@@ -29,6 +30,7 @@ export default function Production() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [complete, setComplete] = useState(null); // batch being completed
+  const [edit, setEdit] = useState(null); // batch being edited
   const [batchToDelete, setBatchToDelete] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
 
@@ -101,7 +103,12 @@ export default function Production() {
                   <XCircle className="h-3.5 w-3.5" />
                 </Button>
               )}
-              {can('production.delete') && b.status !== 'COMPLETED' && (
+              {can('production.update') && (
+                <Button size="sm" variant="ghost" title="Edit batch" onClick={() => setEdit(b)}>
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+              )}
+              {can('production.delete') && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -123,7 +130,7 @@ export default function Production() {
             value={statusFilter}
             onChange={setStatusFilter}
             placeholder="All statuses"
-            options={['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map((s) => ({ value: s, label: prettyLabel(s) }))}
+            options={PRODUCTION_STATUSES.map((s) => ({ value: s, label: prettyLabel(s) }))}
           />
         }
         pageSize={8}
@@ -131,6 +138,16 @@ export default function Production() {
 
       <CreateBatchModal open={createOpen} onClose={() => setCreateOpen(false)} products={products} varieties={varieties} seedClasses={seedClasses} />
       <CompleteBatchModal batch={complete} onClose={() => setComplete(null)} />
+      {edit && (
+        <EditBatchModal
+          key={edit.id}
+          batch={edit}
+          onClose={() => setEdit(null)}
+          products={products}
+          varieties={varieties}
+          seedClasses={seedClasses}
+        />
+      )}
       <ConfirmDialog
         open={!!batchToDelete}
         onClose={() => setBatchToDelete(null)}
@@ -243,6 +260,118 @@ function CompleteBatchModal({ batch, onClose }) {
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit">Complete Batch</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * Edit any batch, including a COMPLETED one. A correction never re-runs the
+ * completion flow, so warehouse stock is deliberately left untouched — the
+ * notices below say so rather than letting output figures silently drift away
+ * from the stock that completion already booked in.
+ */
+function EditBatchModal({ batch, onClose, products, varieties, seedClasses }) {
+  const updateBatch = useStore((s) => s.updateBatch);
+  const pushToast = useStore((s) => s.pushToast);
+  const [form, setForm] = useState(() => ({
+    batch_number: batch.batch_number ?? '',
+    product_id: batch.product_id ?? '',
+    variety_id: batch.variety_id ?? '',
+    seed_class_id: batch.seed_class_id ?? '',
+    input_qty: String(batch.input_qty ?? ''),
+    output_qty: String(batch.output_qty ?? ''),
+    rejected_qty: String(batch.rejected_qty ?? ''),
+    start_date: batch.start_date ?? '',
+    end_date: batch.end_date ?? '',
+    status: batch.status ?? 'PLANNED',
+    quality_status: batch.quality_status ?? 'PENDING',
+    notes: batch.notes ?? '',
+  }));
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  // Keep the batch's current selection visible even if that record was deactivated.
+  const productOptions = products.filter((p) => p.status === 'ACTIVE' || p.id === batch.product_id);
+  const varietyOptions = varieties.filter((v) => v.status === 'ACTIVE' || v.id === batch.variety_id);
+  const seedClassOptions = seedClasses.filter((c) => c.status === 'ACTIVE' || c.id === batch.seed_class_id);
+
+  const wasCompleted = batch.status === 'COMPLETED';
+  const outputChanged = Number(form.output_qty || 0) !== Number(batch.output_qty ?? 0);
+  const reopened = wasCompleted && form.status !== 'COMPLETED';
+
+  function submit(e) {
+    e.preventDefault();
+    const batchNumber = form.batch_number.trim();
+    try {
+      updateBatch(batch.id, {
+        batch_number: batchNumber,
+        product_id: form.product_id,
+        variety_id: form.variety_id || null,
+        seed_class_id: form.seed_class_id || null,
+        input_qty: Number(form.input_qty),
+        output_qty: Number(form.output_qty || 0),
+        rejected_qty: Number(form.rejected_qty || 0),
+        start_date: form.start_date || null,
+        end_date: form.end_date || null,
+        status: form.status,
+        quality_status: form.quality_status,
+        approved: form.quality_status === 'APPROVED',
+        notes: form.notes,
+      });
+      pushToast(`Batch ${batchNumber} updated`, 'success');
+      onClose();
+    } catch (err) {
+      pushToast(err.message, 'error');
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Edit Batch ${batch.batch_number}`} width="max-w-2xl">
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Batch number" value={form.batch_number} onChange={set('batch_number')} required />
+          <Select label="Status" value={form.status} onChange={set('status')}>
+            {PRODUCTION_STATUSES.map((s) => <option key={s} value={s}>{prettyLabel(s)}</option>)}
+          </Select>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Select label="Product" value={form.product_id} onChange={set('product_id')} required>
+            <option value="">Select product…</option>
+            {productOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+          <Select label="Variety" value={form.variety_id} onChange={set('variety_id')}>
+            <option value="">—</option>
+            {varietyOptions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </Select>
+          <Select label="Seed class" value={form.seed_class_id} onChange={set('seed_class_id')}>
+            <option value="">—</option>
+            {seedClassOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Input label="Input quantity (kg)" type="number" min="0.01" step="0.01" value={form.input_qty} onChange={set('input_qty')} required />
+          <Input label="Output quantity (kg)" type="number" min="0" step="0.01" value={form.output_qty} onChange={set('output_qty')} required />
+          <Input label="Rejected quantity (kg)" type="number" min="0" step="0.01" value={form.rejected_qty} onChange={set('rejected_qty')} />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Input label="Start date" type="date" value={form.start_date} onChange={set('start_date')} />
+          <Input label="End date" type="date" value={form.end_date} onChange={set('end_date')} />
+          <Select label="Quality status" value={form.quality_status} onChange={set('quality_status')}>
+            {QUALITY_STATUSES.map((s) => <option key={s} value={s}>{prettyLabel(s)}</option>)}
+          </Select>
+        </div>
+        <Textarea label="Notes" value={form.notes} onChange={set('notes')} />
+        {wasCompleted && (outputChanged || reopened) && (
+          <div className="rounded-xl bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+            {reopened
+              ? 'Moving this batch out of Completed leaves its warehouse stock in place. Completing it again will add the output quantity to stock a second time.'
+              : 'Output was booked into warehouse stock when this batch was completed. Changing it here does not adjust the stock already in the warehouse — adjust that from Inventory if it needs to match.'}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit">Save Changes</Button>
         </div>
       </form>
     </Modal>

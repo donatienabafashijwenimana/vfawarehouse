@@ -48,14 +48,22 @@ export const productionSlice = (set, get) => ({
     return batch;
   },
 
+  /**
+   * Update a batch, including one that is already COMPLETED. Every status is
+   * editable: corrections to a finished batch never re-run the completion flow,
+   * so warehouse stock is left untouched (reconcile it from Inventory).
+   */
   updateBatch(id, fields) {
-    set((s) => ({ batches: s.batches.map((b) => (b.id === id ? { ...b, ...fields } : b)) }));
-    get().logAction(`Updated production batch`, 'Production');
+    const batch = get().batches.find((b) => b.id === id);
+    if (!batch) throw new Error('Batch not found');
+    const next = { ...batch, ...fields };
+    assertEditableBatch(next, get().batches.filter((b) => b.id !== id));
+    set((s) => ({ batches: s.batches.map((b) => (b.id === id ? next : b)) }));
+    get().logAction(`Updated production batch ${batch.batch_number}`, 'Production');
   },
 
   deleteBatch(id) {
     const batch = get().batches.find((b) => b.id === id);
-    if (batch?.status === 'COMPLETED') throw new Error('Completed batches cannot be deleted.');
     if (get().inventory.some((row) => row.batch_id === id)) {
       throw new Error('Batches with inventory cannot be deleted. Remove or reassign the inventory first.');
     }
@@ -163,6 +171,31 @@ export const productionSlice = (set, get) => ({
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Mirrors the production_batches column constraints so a bad edit is rejected in
+ * the store instead of failing later during the workspace sync.
+ */
+function assertEditableBatch(batch, siblings) {
+  const number = String(batch.batch_number ?? '').trim();
+  if (!number) throw new Error('Batch number is required');
+  if (siblings.some((b) => String(b.batch_number).trim().toLowerCase() === number.toLowerCase())) {
+    throw new Error(`Batch number ${number} is already used by another batch`);
+  }
+  if (!batch.product_id) throw new Error('A batch must be linked to a product');
+  if (!PRODUCTION_STATUSES.includes(batch.status)) throw new Error(`Unknown production status "${batch.status}"`);
+  if (!QUALITY_STATUSES.includes(batch.quality_status)) throw new Error(`Unknown quality status "${batch.quality_status}"`);
+
+  const input = Number(batch.input_qty);
+  if (!Number.isFinite(input) || input <= 0) throw new Error('Input quantity must be greater than zero');
+  for (const [key, label] of [['output_qty', 'Output quantity'], ['rejected_qty', 'Rejected quantity']]) {
+    const value = Number(batch[key] ?? 0);
+    if (!Number.isFinite(value) || value < 0) throw new Error(`${label} cannot be negative`);
+  }
+  if (batch.start_date && batch.end_date && batch.end_date < batch.start_date) {
+    throw new Error('End date cannot be earlier than the start date');
+  }
 }
 
 export function generateBatchNumber(existing = []) {

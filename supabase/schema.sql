@@ -187,6 +187,21 @@ create table if not exists inventory (
 create unique index if not exists inventory_unique_row
   on inventory (product_id, coalesce(batch_id, '00000000-0000-0000-0000-000000000000'::uuid), warehouse_id);
 
+-- §37: stock can never go negative, and on-hand must always cover the quantity
+-- reserved, quarantined or written off against the row.
+alter table inventory
+  drop constraint if exists inventory_no_negative_stock;
+
+alter table inventory
+  add constraint inventory_no_negative_stock
+  check (
+    quantity >= 0
+    and reserved_qty >= 0
+    and quarantined_qty >= 0
+    and damaged_qty >= 0
+    and quantity >= reserved_qty + quarantined_qty + damaged_qty
+  ) not valid;
+
 create table if not exists stock_movements (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references products(id),

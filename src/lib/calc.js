@@ -24,7 +24,7 @@ export function netIncome(salesTotal, expensesTotal) {
 
 /** Sum of available quantities across inventory rows. */
 export function totalAvailable(inventoryRows = []) {
-  return inventoryRows.reduce((sum, row) => sum + (Number(row.available_qty ?? row.quantity) || 0), 0);
+  return inventoryRows.reduce((sum, row) => sum + availableQty(row), 0);
 }
 
 /** Row available = quantity − reserved − quarantined − damaged (never negative, §37). */
@@ -34,6 +34,32 @@ export function availableQty(row) {
   const quarantined = Number(row.quarantined_qty) || 0;
   const damaged = Number(row.damaged_qty) || 0;
   return Math.max(0, q - reserved - quarantined - damaged);
+}
+
+/**
+ * What a movement does to the stock position, so reports never have to infer it
+ * from the type name alone:
+ *   IN/OUT        — changes what is on hand (and therefore available)
+ *   WRITTEN_OFF   — stays on hand but leaves available (damaged)
+ *   HELD/UNHELD   — moves between available and reserved/quarantined only
+ *   INTERNAL      — moves between warehouses, company position unchanged
+ */
+export const MOVEMENT_DIRECTIONS = {
+  PRODUCTION: 'IN',
+  RETURN: 'IN',
+  ADJUSTMENT_IN: 'IN',
+  SALE: 'OUT',
+  ADJUSTMENT_OUT: 'OUT',
+  DAMAGE: 'WRITTEN_OFF',
+  RESERVATION: 'HELD',
+  QUARANTINE: 'HELD',
+  RELEASE: 'UNHELD',
+  RELEASE_QUARANTINE: 'UNHELD',
+  TRANSFER: 'INTERNAL',
+};
+
+export function movementDirection(movementType) {
+  return MOVEMENT_DIRECTIONS[movementType] ?? 'NEUTRAL';
 }
 
 /** Group array rows by a key, returning [{ key, rows }]. */

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Ban, CheckCheck, Clock3, PackageCheck, PackageMinus, RotateCcw, ShieldAlert, Wrench, Plus } from 'lucide-react';
+import { AlertTriangle, ArrowDownToLine, ArrowLeftRight, ArrowUpFromLine, Ban, CheckCheck, Clock3, PackageCheck, PackageMinus, RotateCcw, ShieldAlert, Wrench, Plus } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, Textarea } from '../../components/ui/primitives';
@@ -72,10 +72,22 @@ export default function Inventory() {
     group.records.push(item);
   }
   const productRows = [...productGroups.values()];
-  const movementQty = (types) => movements
+  // Every headline figure below is scoped to the same rows the table shows, so a
+  // warehouse filter can never leave the cards reporting stock the list omits.
+  const filteredMovements = warehouseFilter
+    ? movements.filter((m) => m.warehouse_id === warehouseFilter)
+    : movements;
+  const filteredOrders = warehouseFilter
+    ? orders.filter((o) =>
+        (Array.isArray(o.items) ? o.items : []).some(
+          (item) => !item.warehouse_id || item.warehouse_id === warehouseFilter
+        )
+      )
+    : orders;
+  const movementQty = (types) => filteredMovements
     .filter((m) => types.includes(m.movement_type))
     .reduce((sum, m) => sum + (Number(m.quantity) || 0), 0);
-  const orderQty = (statuses) => orders
+  const orderQty = (statuses) => filteredOrders
     .filter((o) => statuses.includes(o.status))
     .reduce(
       (sum, o) => sum + (Array.isArray(o.items)
@@ -85,15 +97,16 @@ export default function Inventory() {
     );
 
   const totals = {
-    quantity: inventory.reduce((s, i) => s + (Number(i.quantity) || 0), 0),
-    available: inventory.reduce((s, i) => s + availableQty(i), 0),
-    reserved: inventory.reduce((s, i) => s + (Number(i.reserved_qty) || 0), 0),
-    quarantined: inventory.reduce((s, i) => s + (Number(i.quarantined_qty) || 0), 0),
-    damaged: inventory.reduce((s, i) => s + (Number(i.damaged_qty) || 0), 0),
+    quantity: rows.reduce((s, i) => s + (Number(i.quantity) || 0), 0),
+    available: rows.reduce((s, i) => s + availableQty(i), 0),
+    reserved: rows.reduce((s, i) => s + (Number(i.reserved_qty) || 0), 0),
+    quarantined: rows.reduce((s, i) => s + (Number(i.quarantined_qty) || 0), 0),
+    damaged: rows.reduce((s, i) => s + (Number(i.damaged_qty) || 0), 0),
     stockIn: movementQty(['PRODUCTION', 'RETURN', 'ADJUSTMENT_IN']),
     stockOut: movementQty(['SALE', 'DAMAGE', 'ADJUSTMENT_OUT']),
     sold: movementQty(['SALE']),
     returned: movementQty(['RETURN']),
+    transferred: movementQty(['TRANSFER']),
     delivered: orderQty(['COMPLETED']),
     pending: orderQty(['PENDING', 'CONFIRMED', 'PROCESSING', 'READY']),
   };
@@ -116,13 +129,19 @@ export default function Inventory() {
           <div id="stock-out"><KPICard icon={ArrowUpFromLine} label="Stock Out" value={`${formatNumber(totals.stockOut)} kg`} sub="Sales, damage & removals" tone="red" /></div>
           <div id="current-stock"><KPICard icon={PackageCheck} label="Current Available" value={`${formatNumber(totals.available)} kg`} sub={`${formatNumber(totals.quantity)} kg on hand`} tone="blue" /></div>
         </div>
+        {warehouseFilter && (
+          <p className="text-xs text-gray-500">
+            Figures above cover {warehouseName(warehouseFilter)} only. Warehouse-to-warehouse transfers are internal moves, so they are excluded from Stock In and Stock Out.
+          </p>
+        )}
       </section>
 
       <section className="space-y-3">
         <div><h2 className="text-base font-bold text-gray-800">Inventory lifecycle</h2><p className="text-sm text-gray-500">Sales, returns and customer-order fulfilment.</p></div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <div id="sold-inventory"><KPICard icon={PackageMinus} label="Sold Inventory" value={`${formatNumber(totals.sold)} kg`} sub="Issued through sales" tone="purple" /></div>
           <div id="returned"><KPICard icon={RotateCcw} label="Returned" value={`${formatNumber(totals.returned)} kg`} sub="Returned into stock" tone="green" /></div>
+          <div id="transferred"><KPICard icon={ArrowLeftRight} label="Transferred" value={`${formatNumber(totals.transferred)} kg`} sub="Moved between warehouses" tone="blue" /></div>
           <div id="delivered"><KPICard icon={CheckCheck} label="Delivered" value={`${formatNumber(totals.delivered)} kg`} sub="Completed order quantities" tone="green" /></div>
           <div id="pending-orders"><KPICard icon={Clock3} label="Pending Orders" value={`${formatNumber(totals.pending)} kg`} sub="Open order quantities" tone="amber" /></div>
         </div>

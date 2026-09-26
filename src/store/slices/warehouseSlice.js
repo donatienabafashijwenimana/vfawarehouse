@@ -3,6 +3,21 @@ import { availableQty } from '../../lib/calc';
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `id_${Date.now()}_${Math.random()}`);
 const nowISO = () => new Date().toISOString();
 
+/**
+ * Last line of defence for §37: on-hand stock never goes negative and always
+ * still covers what is reserved, quarantined or written off against the row.
+ * Runs after every mutation so a newly added movement type cannot skip it.
+ */
+function assertStockLevels(row) {
+  const quantity = Number(row.quantity);
+  if (!Number.isFinite(quantity) || quantity < 0) throw new Error('Stock quantity cannot be negative');
+  const committed =
+    (Number(row.reserved_qty) || 0) + (Number(row.quarantined_qty) || 0) + (Number(row.damaged_qty) || 0);
+  if (committed > quantity) {
+    throw new Error(`Stock of ${quantity} kg is less than the ${committed} kg already reserved, quarantined or damaged`);
+  }
+}
+
 export const MOVEMENT_TYPES = ['PRODUCTION', 'SALE', 'RETURN', 'DAMAGE', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'TRANSFER', 'RESERVATION', 'RELEASE', 'QUARANTINE', 'RELEASE_QUARANTINE'];
 
 /**
@@ -27,6 +42,11 @@ export const warehouseSlice = (set, get) => ({
 
   // ---- Inventory ----
   addInventory({ product_id, batch_id, warehouse_id, quantity }) {
+    const qty = Number(quantity);
+    if (!product_id) throw new Error('Inventory must be linked to a product');
+    if (!warehouse_id) throw new Error('Inventory must be linked to a warehouse');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Stock-in quantity must be a positive number');
+
     const existing = get().inventory.find(
       (i) =>
         i.product_id === product_id &&
@@ -34,9 +54,9 @@ export const warehouseSlice = (set, get) => ({
         i.warehouse_id === warehouse_id
     );
     if (existing) {
-      set((s) => ({
-        inventory: s.inventory.map((i) => (i.id === existing.id ? { ...i, quantity: i.quantity + quantity } : i)),
-      }));
+      const merged = { ...existing, quantity: (Number(existing.quantity) || 0) + qty };
+      assertStockLevels(merged);
+      set((s) => ({ inventory: s.inventory.map((i) => (i.id === existing.id ? merged : i)) }));
       return existing.id;
     }
     const row = {
@@ -44,12 +64,13 @@ export const warehouseSlice = (set, get) => ({
       product_id,
       batch_id: batch_id ?? null,
       warehouse_id,
-      quantity,
+      quantity: qty,
       reserved_qty: 0,
       quarantined_qty: 0,
       damaged_qty: 0,
       updated_at: nowISO(),
     };
+    assertStockLevels(row);
     set((s) => ({ inventory: [...s.inventory, row] }));
     return row.id;
   },
@@ -65,6 +86,7 @@ export const warehouseSlice = (set, get) => ({
       reference_type = null,
       reference_id = null,
       notes = '',
+      to_warehouse_id = null,
     } = mv;
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) throw new Error('Movement quantity must be a positive number');
@@ -121,12 +143,19 @@ export const warehouseSlice = (set, get) => ({
         row.quarantined_qty -= qty;
         break;
       case 'TRANSFER':
-        throw new Error('TRANSFER requires source and destination warehouses — use transferStock()');
+        if (!to_warehouse_id) throw new Error('TRANSFER requires a destination warehouse — use transferStock()');
+        if (to_warehouse_id === warehouse_id) throw new Error('Source and destination warehouses must differ');
+        if (availableQty(row) < qty) {
+          throw new Error('Insufficient available stock to transfer (§37: negative stock is not allowed)');
+        }
+        row.quantity -= qty;
+        break;
       default:
         break;
     }
 
     row.updated_at = nowISO();
+    assertStockLevels(row);
     set((s) => ({
       inventory: inv
         ? s.inventory.map((i) => (i.id === row.id ? { ...row } : i))
@@ -144,9 +173,48 @@ export const warehouseSlice = (set, get) => ({
       notes,
     });
 
+    // A transfer leaves the company stock position unchanged, so it must not
+    // read as a receipt or an issue. The destination leg is recorded as its own
+    // TRANSFER movement on the same reference, and the two rows pair up by
+    // warehouse instead of inflating Stock In / Stock Out.
+    if (movement_type === 'TRANSFER') {
+      const destInv = get().inventory.find(
+        (i) => i.product_id === product_id && (i.batch_id ?? null) === (batch_id ?? null) && i.warehouse_id === to_warehouse_id
+      );
+      const destRow = destInv
+        ? { ...destInv, quantity: (Number(destInv.quantity) || 0) + qty, updated_at: nowISO() }
+        : {
+            id: uid(),
+            product_id,
+            batch_id,
+            warehouse_id: to_warehouse_id,
+            quantity: qty,
+            reserved_qty: 0,
+            quarantined_qty: 0,
+            damaged_qty: 0,
+            updated_at: nowISO(),
+          };
+      assertStockLevels(destRow);
+      set((s) => ({
+        inventory: destInv
+          ? s.inventory.map((i) => (i.id === destRow.id ? destRow : i))
+          : [...s.inventory, destRow],
+      }));
+      get().addMovement({
+        product_id,
+        batch_id,
+        warehouse_id: to_warehouse_id,
+        movement_type: 'TRANSFER',
+        quantity: qty,
+        reference_type,
+        reference_id,
+        notes,
+      });
+    }
+
     // Stock levels changed — surface any product that dropped to/below its
     // minimum threshold so alerts stay live during the session (§29).
-    if (['SALE', 'DAMAGE', 'ADJUSTMENT_OUT'].includes(movement_type)) {
+    if (['SALE', 'DAMAGE', 'ADJUSTMENT_OUT', 'TRANSFER'].includes(movement_type)) {
       get().checkLowStock();
     }
   },
@@ -154,12 +222,10 @@ export const warehouseSlice = (set, get) => ({
   transferStock({ product_id, batch_id, from_warehouse, to_warehouse, quantity, notes }) {
     if (from_warehouse === to_warehouse) throw new Error('Source and destination warehouses must differ');
     get().applyMovement({
-      product_id, batch_id, warehouse_id: from_warehouse,
-      movement_type: 'ADJUSTMENT_OUT', quantity, notes: notes || 'Transfer out',
-    });
-    get().applyMovement({
-      product_id, batch_id, warehouse_id: to_warehouse,
-      movement_type: 'ADJUSTMENT_IN', quantity, notes: notes || 'Transfer in',
+      product_id, batch_id, warehouse_id: from_warehouse, to_warehouse_id: to_warehouse,
+      movement_type: 'TRANSFER', quantity,
+      reference_type: 'inventory_transfer', reference_id: uid(),
+      notes: notes || 'Transfer between warehouses',
     });
     get().logAction('Transferred stock between warehouses', 'Inventory');
   },

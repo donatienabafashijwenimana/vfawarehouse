@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, CheckCheck, Clock3, Package, RotateCcw, ShieldAlert, Warehouse as WarehouseIcon } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeftRight, ArrowUpFromLine, CheckCheck, Clock3, Package, RotateCcw, ShieldAlert, Warehouse as WarehouseIcon } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, StatusBadge, Textarea } from '../../components/ui/primitives';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader, KPICard } from '../../components/ui/KPICard';
+import { FilterSelect } from '../../components/ui/feedback';
 import { formatDateTime, formatNumber } from '../../lib/format';
 import { availableQty } from '../../lib/calc';
 import { useAction } from '../../hooks/useAction';
@@ -14,6 +15,7 @@ const MOVEMENT_VIEWS = {
   'stock-out': { title: 'Stock Out', subtitle: 'All quantities issued or removed from inventory', types: ['SALE', 'DAMAGE', 'ADJUSTMENT_OUT'], icon: ArrowUpFromLine, tone: 'red' },
   sold: { title: 'Sold Inventory', subtitle: 'Inventory issued through completed sales', types: ['SALE'], icon: Package, tone: 'purple' },
   returned: { title: 'Returned Inventory', subtitle: 'Inventory returned into stock', types: ['RETURN'], icon: RotateCcw, tone: 'green' },
+  transferred: { title: 'Transferred Inventory', subtitle: 'Stock moved between warehouses — internal, not a receipt or an issue', types: ['TRANSFER'], icon: ArrowLeftRight, tone: 'blue' },
 };
 
 export default function InventorySubview({ view }) {
@@ -32,6 +34,7 @@ export default function InventorySubview({ view }) {
   const [placement, setPlacement] = useState(null);
   const [recordGroup, setRecordGroup] = useState(null);
   const [restoreRow, setRestoreRow] = useState(null);
+  const [warehouseFilter, setWarehouseFilter] = useState('');
   const groupCurrentStock = true;
 
   const productName = (id) => products.find((p) => p.id === id)?.name ?? '—';
@@ -48,15 +51,21 @@ export default function InventorySubview({ view }) {
 
   const movementConfig = MOVEMENT_VIEWS[view];
   const movementRows = movementConfig
-    ? movements.filter((m) => movementConfig.types.includes(m.movement_type))
+    ? movements.filter((m) =>
+        movementConfig.types.includes(m.movement_type) &&
+        (!warehouseFilter || m.warehouse_id === warehouseFilter)
+      )
     : [];
   const stateRows = useMemo(() => {
-    if (view === 'current-stock') return inventory.filter((i) => availableQty(i) > 0);
-    if (view === 'quarantined') return inventory.filter((i) => Number(i.quarantined_qty) > 0);
-    if (view === 'reserved') return inventory.filter((i) => Number(i.reserved_qty) > 0);
-    if (view === 'damaged') return inventory.filter((i) => Number(i.damaged_qty) > 0);
-    return inventory;
-  }, [view, inventory]);
+    const scoped = warehouseFilter
+      ? inventory.filter((i) => i.warehouse_id === warehouseFilter)
+      : inventory;
+    if (view === 'current-stock') return scoped.filter((i) => availableQty(i) > 0);
+    if (view === 'quarantined') return scoped.filter((i) => Number(i.quarantined_qty) > 0);
+    if (view === 'reserved') return scoped.filter((i) => Number(i.reserved_qty) > 0);
+    if (view === 'damaged') return scoped.filter((i) => Number(i.damaged_qty) > 0);
+    return scoped;
+  }, [view, inventory, warehouseFilter]);
   const groupedCurrentStock = useMemo(() => {
     const groups = new Map();
     for (const row of stateRows) {
@@ -80,6 +89,17 @@ export default function InventorySubview({ view }) {
     ? orders.filter((o) => o.status === 'COMPLETED')
     : orders.filter((o) => ['PENDING', 'CONFIRMED', 'PROCESSING', 'READY'].includes(o.status));
 
+  // One warehouse selector, shared by the movement views and the stock-state
+  // views so every figure on the page is scoped to the warehouse being shown.
+  const warehouseFilterSelect = (
+    <FilterSelect
+      value={warehouseFilter}
+      onChange={setWarehouseFilter}
+      placeholder="All warehouses"
+      options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+    />
+  );
+
   if (movementConfig) {
     const total = movementRows.reduce((sum, m) => sum + (Number(m.quantity) || 0), 0);
     const Icon = movementConfig.icon;
@@ -96,6 +116,7 @@ export default function InventorySubview({ view }) {
           rows={movementRows}
           searchKeys={['notes', (m) => productName(m.product_id)]}
           searchPlaceholder="Search product or movement notes…"
+          filters={warehouseFilterSelect}
           pageSize={12}
           emptyHint={`No ${movementConfig.title.toLowerCase()} movements recorded yet.`}
         />
@@ -144,7 +165,12 @@ export default function InventorySubview({ view }) {
     reserved: 'reserve',
     damaged: 'damage',
   }[view];
-  const placeableRows = inventory.filter((i) => availableQty(i) > 0);
+  // Placing stock into a condition draws from anything still available in the
+  // selected warehouse, not only rows already sitting in that condition.
+  const placeableRows = (warehouseFilter
+    ? inventory.filter((i) => i.warehouse_id === warehouseFilter)
+    : inventory
+  ).filter((i) => availableQty(i) > 0);
   const placeStock = (data) => {
     const row = inventory.find((item) => item.id === data.inventory_id);
     if (!row) throw new Error('Select an inventory item');
@@ -192,6 +218,7 @@ export default function InventorySubview({ view }) {
         rows={view === 'current-stock' && groupCurrentStock ? groupedCurrentStock : stateRows}
         searchKeys={[(i) => productName(i.product_id), (i) => warehouseName(i.warehouse_id)]}
         searchPlaceholder="Search product or warehouse…"
+        filters={warehouseFilterSelect}
         pageSize={12}
         emptyHint="No matching inventory records found."
       />
