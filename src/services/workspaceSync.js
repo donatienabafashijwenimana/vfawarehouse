@@ -119,6 +119,34 @@ async function syncRows(supabase, table, oldRows, nextRows, map, state, { mode =
   }
 }
 
+async function ensureInventoryBatchReferences(supabase, inventory, batches, state) {
+  const batchIds = [...new Set(inventory.map((row) => row.batch_id).filter(Boolean))];
+  if (!batchIds.length) return;
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('production_batches')
+    .select('id')
+    .in('id', batchIds);
+  if (lookupError) throw lookupError;
+
+  const existingIds = new Set((existing ?? []).map((row) => row.id));
+  const localBatches = new Map(batches.map((batch) => [batch.id, batch]));
+  const missingIds = batchIds.filter((id) => !existingIds.has(id));
+  if (!missingIds.length) return;
+
+  const missingRows = missingIds.map((id) => localBatches.get(id));
+  const missingLocal = missingIds.filter((_, index) => !missingRows[index]);
+  if (missingLocal.length) {
+    throw new Error(`Inventory refers to missing production batch ${missingLocal.join(', ')}. Restore or correct the batch reference before saving.`);
+  }
+
+  const batchMapper = TABLES.find(([key]) => key === 'batches')[2];
+  const { error: insertError } = await supabase
+    .from('production_batches')
+    .upsert(missingRows.map((row) => batchMapper(row, state)), { onConflict: 'id', ignoreDuplicates: true });
+  if (insertError) throw insertError;
+}
+
 export async function syncWorkspaceChanges(previous, next) {
   const supabase = await getSupabase();
   const changed = new Set(TABLES.filter(([key]) => !same(previous[key] ?? [], next[key] ?? [])).map(([key]) => key));
@@ -151,6 +179,7 @@ export async function syncWorkspaceChanges(previous, next) {
   for (const table of upsertOrder) {
     const item = maps.get(table);
     if (!item || !changed.has(item.key)) continue;
+    if (table === 'inventory') await ensureInventoryBatchReferences(supabase, next.inventory ?? [], next.batches ?? [], next);
     const rows = itemRows[table];
     await syncRows(supabase, table, rows?.old ?? previous[item.key] ?? [], rows?.next ?? next[item.key] ?? [], item.map, next, { mode: 'upsert' });
   }

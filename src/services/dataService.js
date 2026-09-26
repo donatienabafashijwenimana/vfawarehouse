@@ -58,7 +58,7 @@ export const productsApi = {
   list: () =>
     list(
       'products',
-      '*, category:categories(name), variety:varieties(name), seed_class:seed_classes(name)',
+      '*, variety:varieties(name), seed_class:seed_classes(name)',
       { column: 'created_at', ascending: false }
     ),
   create: (row) => insert('products', row),

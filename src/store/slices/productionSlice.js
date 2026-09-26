@@ -56,6 +56,9 @@ export const productionSlice = (set, get) => ({
   deleteBatch(id) {
     const batch = get().batches.find((b) => b.id === id);
     if (batch?.status === 'COMPLETED') throw new Error('Completed batches cannot be deleted.');
+    if (get().inventory.some((row) => row.batch_id === id)) {
+      throw new Error('Batches with inventory cannot be deleted. Remove or reassign the inventory first.');
+    }
     set((s) => ({
       batches: s.batches.filter((b) => b.id !== id),
       stages: s.stages.filter((st) => st.batch_id !== id),

@@ -5,18 +5,16 @@ import { DataTable } from '../../components/ui/DataTable';
 import { Button, Input, Select, Textarea, StatusBadge } from '../../components/ui/primitives';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/KPICard';
-import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
 import { formatRWF, formatDate } from '../../lib/format';
 
 const EMPTY = {
-  name: '', sku: '', category_id: '', variety_id: '', seed_class_id: '',
+  name: '', sku: '', variety_id: '', seed_class_id: '',
   description: '', unit: 'kg', selling_price: '', minimum_stock: '', status: 'ACTIVE',
 };
 
 export default function Products() {
   const products = useStore((s) => s.products);
-  const categories = useStore((s) => s.categories);
   const varieties = useStore((s) => s.varieties);
   const seedClasses = useStore((s) => s.seedClasses);
   const inventory = useStore((s) => s.inventory);
@@ -25,18 +23,16 @@ export default function Products() {
   const deleteProduct = useStore((s) => s.deleteProduct);
   const run = useAction();
   const [modal, setModal] = useState(null);
-  const [categoryFilter, setCategoryFilter] = useState('');
 
   const stockOf = (productId) =>
     inventory
       .filter((i) => i.product_id === productId)
       .reduce((s, i) => s + Math.max(0, i.quantity - (i.reserved_qty ?? 0) - (i.quarantined_qty ?? 0) - (i.damaged_qty ?? 0)), 0);
 
-  const catName = (id) => categories.find((c) => c.id === id)?.name ?? '—';
   const varName = (id) => varieties.find((v) => v.id === id)?.name ?? '—';
   const clsName = (id) => seedClasses.find((c) => c.id === id)?.name ?? '—';
 
-  const rows = categoryFilter ? products.filter((p) => p.category_id === categoryFilter) : products;
+  const rows = products;
 
   function save(form) {
     const data = {
@@ -44,6 +40,7 @@ export default function Products() {
       selling_price: Number(form.selling_price),
       minimum_stock: Number(form.minimum_stock),
     };
+    delete data.category_id;
     if (modal.mode === 'create') run(() => addProduct(data), 'Product created');
     else run(() => updateProduct(modal.product.id, data), 'Product updated');
     setModal(null);
@@ -65,7 +62,6 @@ export default function Products() {
               <div className="font-mono text-xs text-gray-400">{p.sku}</div>
             </div>
           )},
-          { key: 'category_id', label: 'Category', render: (p) => <span className="text-gray-600">{catName(p.category_id)}</span> },
           { key: 'variety_id', label: 'Variety', render: (p) => <span className="text-gray-600">{varName(p.variety_id)}</span> },
           { key: 'seed_class_id', label: 'Seed Class', render: (p) => <span className="text-gray-600">{clsName(p.seed_class_id)}</span> },
           { key: 'selling_price', label: 'Price', render: (p) => <span className="font-semibold text-gray-700">{formatRWF(p.selling_price)}</span> },
@@ -86,14 +82,6 @@ export default function Products() {
         rows={rows}
         searchKeys={['name', 'sku']}
         searchPlaceholder="Search name or SKU…"
-        filters={
-          <FilterSelect
-            value={categoryFilter}
-            onChange={setCategoryFilter}
-            placeholder="All categories"
-            options={categories.map((c) => ({ value: c.id, label: c.name }))}
-          />
-        }
         pageSize={8}
       />
 
@@ -101,7 +89,6 @@ export default function Products() {
         modal={modal}
         onClose={() => setModal(null)}
         onSave={save}
-        categories={categories}
         varieties={varieties}
         seedClasses={seedClasses}
       />
@@ -109,7 +96,7 @@ export default function Products() {
   );
 }
 
-function ProductModal({ modal, onClose, onSave, categories, varieties, seedClasses }) {
+function ProductModal({ modal, onClose, onSave, varieties, seedClasses }) {
   const [form, setForm] = useState(() => (modal?.mode === 'edit' ? { ...modal.product } : { ...EMPTY }));
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -120,11 +107,7 @@ function ProductModal({ modal, onClose, onSave, categories, varieties, seedClass
           <Input label="Product name" value={form.name} onChange={set('name')} required />
           <Input label="SKU" value={form.sku} onChange={set('sku')} required placeholder="VFA-XXX-XXX" />
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Select label="Category" value={form.category_id} onChange={set('category_id')} required>
-            <option value="">Select…</option>
-            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
+        <div className="grid grid-cols-2 gap-3">
           <Select label="Variety" value={form.variety_id} onChange={set('variety_id')} required>
             <option value="">Select…</option>
             {varieties.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
