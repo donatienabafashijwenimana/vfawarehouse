@@ -96,4 +96,6 @@ src/
 ├── services/         # supabase client, auth service, data facade
 └── store/            # Zustand slices; loaded from Supabase after authentication
 supabase/schema.sql   # full database: tables, RLS, RPCs, seed
+supabase/migrations/  # replayed in version order by `supabase db push`; schema changes only
+supabase/scripts/     # one-off operational scripts, run by hand; never in the migration chain
 ```

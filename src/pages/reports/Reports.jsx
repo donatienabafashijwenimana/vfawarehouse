@@ -9,6 +9,8 @@ import { PageHeader, ChartCard } from '../../components/ui/KPICard';
 import { Button, Select } from '../../components/ui/primitives';
 import { CHART_COLORS, formatNumber, formatRWF } from '../../lib/format';
 import { productionEfficiency } from '../../lib/calc';
+import { groupByUnit, unitLookup, unitOf } from '../../lib/units';
+import { GroupedTotal } from '../../components/ui/UnitTotals';
 import ReportGenerator from './ReportGenerator';
 
 const TABS = ['Production', 'Inventory', 'Sales', 'Financial', 'Custom Reports'];
@@ -75,34 +77,47 @@ function ProductionReport({ year }) {
   const batches = useStore((s) => s.batches);
   const varieties = useStore((s) => s.varieties);
   const seedClasses = useStore((s) => s.seedClasses);
+  const unitForProduct = unitLookup(useStore((s) => s.products));
   const yearBatches = batches.filter((batch) => String(batch.end_date ?? batch.start_date ?? batch.created_at ?? '').slice(0, 4) === year);
   const months = useMonths(year);
 
-  const byVariety = varieties.map((v, i) => ({
-    name: v.name,
-    input: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + b.input_qty, 0),
-    output: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.output_qty ?? 0), 0),
-    rejected: yearBatches.filter((b) => b.variety_id === v.id).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
-    color: CHART_COLORS[i % CHART_COLORS.length],
-  }));
+  // Input is counted in the planted product's unit and output and rejects in the
+  // product the batch produced, so an aggregate over a variety, a seed class or a
+  // month can span units. Each of those is therefore reported once per unit
+  // rather than as a single figure that would add kilograms to bags.
+  const plantedUnitOf = (b) => unitForProduct(b.product_id);
+  const outputUnitOf = (b) => unitForProduct(b.output_product_id ?? b.product_id);
 
-  const byClass = seedClasses.map((c) => {
-    const bs = yearBatches.filter((b) => b.seed_class_id === c.id);
-    const input = bs.reduce((s, b) => s + b.input_qty, 0);
-    const output = bs.reduce((s, b) => s + (b.output_qty ?? 0), 0);
-    return { name: c.name, input, output, efficiency: productionEfficiency(input, output) };
-  });
+  const splitByUnit = (label, batchesInGroup) => {
+    const units = [...new Set(batchesInGroup.map((b) => outputUnitOf(b)))];
+    return units.map((unit) => {
+      const sameUnit = batchesInGroup.filter((b) => outputUnitOf(b) === unit);
+      const input = sameUnit.reduce((s, b) => s + (plantedUnitOf(b) === unit ? b.input_qty : 0), 0);
+      const output = sameUnit.reduce((s, b) => s + (b.output_qty ?? 0), 0);
+      const rejected = sameUnit.reduce((s, b) => s + (b.rejected_qty ?? 0), 0);
+      // Efficiency needs the input and the output to be the same product, so a
+      // group that changed product has no comparable ratio.
+      const comparable = sameUnit.every((b) => (b.output_product_id ?? b.product_id) === b.product_id) && sameUnit.length > 0;
+      return {
+        name: units.length > 1 ? `${label} (${unit})` : label,
+        unit, input, output, rejected,
+        efficiency: comparable ? productionEfficiency(input, output) : null,
+      };
+    });
+  };
 
-  const monthly = months.map(({ key, label }) => ({
-    month: label,
-    output: yearBatches.filter((b) => (b.end_date ?? b.start_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.output_qty ?? 0), 0),
-    rejected: yearBatches.filter((b) => (b.end_date ?? b.start_date ?? b.created_at ?? '').slice(0, 7) === key).reduce((s, b) => s + (b.rejected_qty ?? 0), 0),
-  }));
+  const byVariety = varieties.flatMap((v, i) => splitByUnit(v.name, yearBatches.filter((b) => b.variety_id === v.id))
+    .map((row) => ({ ...row, color: CHART_COLORS[i % CHART_COLORS.length] })));
+  const byClass = seedClasses.flatMap((c) => splitByUnit(c.name, yearBatches.filter((b) => b.seed_class_id === c.id)));
+  const monthly = months.flatMap(({ key, label }) => splitByUnit(
+    label,
+    yearBatches.filter((b) => (b.end_date ?? b.start_date ?? b.created_at ?? '').slice(0, 7) === key)
+  ));
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title={`Production by Variety · ${year}`} subtitle="Input vs output (kg)">
+        <ChartCard title={`Production by Variety · ${year}`} subtitle="Input vs output, one row per unit">
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={byVariety}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -110,14 +125,14 @@ function ProductionReport({ year }) {
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="input" fill="#b3e4b3" name="Input (kg)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="output" fill="#2d9e2d" name="Output (kg)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="rejected" fill="#ca9b35" name="Rejected (kg)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="input" fill="#b3e4b3" name="Input" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="output" fill="#2d9e2d" name="Output" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="rejected" fill="#ca9b35" name="Rejected" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title={`Monthly Output vs Rejected · ${year}`} subtitle="Annual total by month (kg)">
+        <ChartCard title={`Monthly Output vs Rejected · ${year}`} subtitle="Annual total by month, one row per unit">
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={monthly}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -133,9 +148,9 @@ function ProductionReport({ year }) {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Efficiency by Variety" subtitle="Output / input × 100">
+        <ChartCard title="Efficiency by Variety" subtitle="Output / input × 100, where the two are comparable">
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={byVariety.map((v) => ({ name: v.name, efficiency: productionEfficiency(v.input, v.output) }))}>
+            <BarChart data={byVariety.map((v) => ({ name: v.name, efficiency: v.efficiency }))}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis unit="%" tick={{ fontSize: 11 }} />
@@ -151,8 +166,8 @@ function ProductionReport({ year }) {
             <thead>
               <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
                 <th className="py-2">Class</th>
-                <th className="py-2">Input (kg)</th>
-                <th className="py-2">Output (kg)</th>
+                <th className="py-2">Input</th>
+                <th className="py-2">Output</th>
                 <th className="py-2">Efficiency</th>
               </tr>
             </thead>
@@ -160,9 +175,9 @@ function ProductionReport({ year }) {
               {byClass.map((c) => (
                 <tr key={c.name} className="border-b border-gray-50 last:border-0">
                   <td className="py-2.5 font-medium text-gray-700">{c.name}</td>
-                  <td className="py-2.5 text-gray-600">{formatNumber(c.input)}</td>
-                  <td className="py-2.5 text-gray-600">{formatNumber(c.output)}</td>
-                  <td className="py-2.5 font-semibold text-green-700">{c.efficiency}%</td>
+                  <td className="py-2.5 text-gray-600">{formatNumber(c.input)} {c.unit}</td>
+                  <td className="py-2.5 text-gray-600">{formatNumber(c.output)} {c.unit}</td>
+                  <td className="py-2.5 font-semibold text-green-700">{c.efficiency != null ? `${c.efficiency}%` : <span className="text-gray-300" title="Not comparable: these batches changed product">—</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -181,57 +196,79 @@ function InventoryReport() {
   const warehouses = useStore((s) => s.warehouses);
 
   const avail = (i) => Math.max(0, i.quantity - (i.reserved_qty ?? 0) - (i.quarantined_qty ?? 0) - (i.damaged_qty ?? 0));
-  const totalBy = (keyFn) => {
-    const map = new Map();
-    inventory.forEach((i) => {
-      const k = keyFn(i);
-      map.set(k, (map.get(k) ?? 0) + avail(i));
-    });
-    return map;
-  };
+  // A variety or a warehouse can hold products counted in different units, so a
+  // share of their stock is only meaningful within one unit at a time: each is
+  // broken down one unit at a time rather than into a single mixed figure.
+  const unitForRow = unitLookup(products);
+  const nameOfVariety = (i) => varieties.find((v) => v.id === products.find((p) => p.id === i.product_id)?.variety_id)?.name ?? '—';
+  const nameOfWarehouse = (i) => warehouses.find((w) => w.id === i.warehouse_id)?.name.replace(/^(Main|Cold Store) /, '') ?? '—';
 
-  const byVariety = Array.from(totalBy((i) => varieties.find((v) => v.id === products.find((p) => p.id === i.product_id)?.variety_id)?.name ?? '—').entries())
-    .map(([name, value], idx) => ({ name, value, color: CHART_COLORS[idx % CHART_COLORS.length] }))
-    .filter((d) => d.value > 0);
+  const varietyByUnit = [...new Set(inventory.map((i) => unitForRow(i.product_id)))].map((unit) => ({
+    unit,
+    data: Array.from(inventory
+      .filter((i) => unitForRow(i.product_id) === unit)
+      .reduce((map, i) => map.set(nameOfVariety(i), (map.get(nameOfVariety(i)) ?? 0) + avail(i)), new Map())
+      .entries())
+      .map(([name, value], idx) => ({ name, value, color: CHART_COLORS[idx % CHART_COLORS.length] }))
+      .filter((d) => d.value > 0),
+  })).filter((g) => g.data.length > 0);
 
-  const byWarehouse = warehouses.map((w, idx) => ({
-    name: w.name.replace(/^(Main|Cold Store) /, ''),
-    value: inventory.filter((i) => i.warehouse_id === w.id).reduce((s, i) => s + avail(i), 0),
-    color: CHART_COLORS[idx % CHART_COLORS.length],
-  })).filter((d) => d.value > 0);
+  const warehouseByUnit = [...new Set(inventory.map((i) => unitForRow(i.product_id)))].map((unit) => ({
+    unit,
+    data: Array.from(inventory
+      .filter((i) => unitForRow(i.product_id) === unit)
+      .reduce((map, i) => map.set(nameOfWarehouse(i), (map.get(nameOfWarehouse(i)) ?? 0) + avail(i)), new Map())
+      .entries())
+      .map(([name, value], idx) => ({ name, value, color: CHART_COLORS[idx % CHART_COLORS.length] }))
+      .filter((d) => d.value > 0),
+  })).filter((g) => g.data.length > 0);
 
   const lowStock = products.filter((p) => {
     const total = inventory.filter((i) => i.product_id === p.id).reduce((s, i) => s + avail(i), 0);
     return (p.minimum_stock ?? 0) > 0 && total <= p.minimum_stock;
   });
 
-  const reservedTotal = inventory.reduce((s, i) => s + (i.reserved_qty ?? 0), 0);
-  const quarantinedTotal = inventory.reduce((s, i) => s + (i.quarantined_qty ?? 0), 0);
-  const damagedTotal = inventory.reduce((s, i) => s + (i.damaged_qty ?? 0), 0);
+  const restricted = (field) => groupByUnit(inventory, { unitOfRow: (i) => unitForRow(i.product_id), totalOf: (i) => Number(i[field]) || 0 });
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Stock by Variety" subtitle="Available kg">
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie data={byVariety} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={48}>
-                {byVariety.map((d) => <Cell key={d.name} fill={d.color} />)}
-              </Pie>
-              <Tooltip formatter={(v) => `${formatNumber(v)} kg`} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-            </PieChart>
-          </ResponsiveContainer>
+        <ChartCard
+          title="Stock by Variety"
+          subtitle={varietyByUnit.length > 1 ? 'Available stock, one chart per unit' : `Available stock (${varietyByUnit[0]?.unit ?? 'kg'})`}
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {varietyByUnit.map((group) => (
+              <div key={group.unit}>
+                {varietyByUnit.length > 1 && <div className="mb-1 text-center text-xs font-medium text-gray-500">{group.unit}</div>}
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={group.data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={72} innerRadius={44}>
+                      {group.data.map((d) => <Cell key={d.name} fill={d.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(v) => `${formatNumber(v)} ${group.unit}`} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ))}
+          </div>
         </ChartCard>
 
-        <ChartCard title="Stock by Warehouse" subtitle="Available kg">
+        <ChartCard
+          title="Stock by Warehouse"
+          subtitle={warehouseByUnit.length > 1 ? 'Available stock, one bar per unit' : `Available stock (${warehouseByUnit[0]?.unit ?? 'kg'})`}
+        >
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={byWarehouse}>
+            <BarChart data={warehouseByUnit.flatMap((group) => group.data.map((d) => ({ name: d.name, [group.unit]: d.value })))}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => `${formatNumber(v)} kg`} />
-              <Bar dataKey="value" fill="#2d9e2d" radius={[4, 4, 0, 0]} />
+              <Tooltip />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {warehouseByUnit.map((group, i) => (
+                <Bar key={group.unit} dataKey={group.unit} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} name={group.unit} />
+              ))}
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -239,13 +276,13 @@ function InventoryReport() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {[
-          { label: 'Reserved stock', value: `${formatNumber(reservedTotal)} kg` },
-          { label: 'Quarantined stock', value: `${formatNumber(quarantinedTotal)} kg` },
-          { label: 'Damaged stock', value: `${formatNumber(damagedTotal)} kg` },
+          { label: 'Reserved stock', groups: restricted('reserved_qty') },
+          { label: 'Quarantined stock', groups: restricted('quarantined_qty') },
+          { label: 'Damaged stock', groups: restricted('damaged_qty') },
         ].map((x) => (
           <div key={x.label} className="rounded-2xl border border-gray-100 bg-white p-5 text-center shadow-sm">
             <div className="text-xs text-gray-400">{x.label}</div>
-            <div className="mt-1 text-xl font-bold text-gray-800">{x.value}</div>
+            <div className="mt-1 text-xl font-bold text-gray-800"><GroupedTotal groups={x.groups} /></div>
           </div>
         ))}
       </div>
@@ -261,7 +298,7 @@ function InventoryReport() {
               return (
                 <div key={p.id} className="flex items-center justify-between rounded-xl border border-yellow-100 bg-yellow-50/60 px-4 py-2.5">
                   <span className="text-sm font-medium text-gray-700">{p.name}</span>
-                  <span className="text-sm font-bold text-yellow-700">{formatNumber(total)} / min {formatNumber(p.minimum_stock)} kg</span>
+                  <span className="text-sm font-bold text-yellow-700">{formatNumber(total)} / min {formatNumber(p.minimum_stock)} {unitOf(p)}</span>
                 </div>
               );
             })}

@@ -8,6 +8,10 @@ import { PageHeader, KPICard } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { formatDateTime, formatNumber } from '../../lib/format';
 import { availableQty } from '../../lib/calc';
+import { groupByUnit, unitLookup } from '../../lib/units';
+import { productDetailLookup } from '../../lib/productDetail';
+import { ProductCell } from '../../components/ui/ProductCell';
+import { GroupedTotal } from '../../components/ui/UnitTotals';
 import { useAction } from '../../hooks/useAction';
 
 const MOVEMENT_VIEWS = {
@@ -21,6 +25,8 @@ const MOVEMENT_VIEWS = {
 export default function InventorySubview({ view }) {
   const inventory = useStore((s) => s.inventory ?? []);
   const products = useStore((s) => s.products ?? []);
+  const varieties = useStore((s) => s.varieties ?? []);
+  const seedClasses = useStore((s) => s.seedClasses ?? []);
   const warehouses = useStore((s) => s.warehouses ?? []);
   const movements = useStore((s) => s.movements ?? []);
   const orders = useStore((s) => s.orders ?? []);
@@ -37,7 +43,10 @@ export default function InventorySubview({ view }) {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const groupCurrentStock = true;
 
+  const unitForRow = unitLookup(products);
+  const grouped = (rows, totalOf) => groupByUnit(rows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf });
   const productName = (id) => products.find((p) => p.id === id)?.name ?? '—';
+  const productDetail = productDetailLookup(products, { varieties, seedClasses });
   const warehouseName = (id) => warehouses.find((w) => w.id === id)?.name ?? '—';
   const batchName = (id) => batches.find((b) => b.id === id)?.batch_number ?? 'Bulk';
   const restorableReservedQty = (row) => {
@@ -101,20 +110,20 @@ export default function InventorySubview({ view }) {
   );
 
   if (movementConfig) {
-    const total = movementRows.reduce((sum, m) => sum + (Number(m.quantity) || 0), 0);
+    const total = grouped(movementRows, (m) => Number(m.quantity) || 0);
     const Icon = movementConfig.icon;
     return (
       <div className="space-y-6">
         <PageHeader title={movementConfig.title} subtitle={movementConfig.subtitle} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-          <KPICard icon={Icon} label="Total Quantity" value={`${formatNumber(total)} kg`} tone={movementConfig.tone} />
+          <KPICard icon={Icon} label="Total Quantity" value={<GroupedTotal groups={total} />} tone={movementConfig.tone} />
           <KPICard icon={Package} label="Transactions" value={movementRows.length} tone="blue" />
           <KPICard icon={WarehouseIcon} label="Warehouses" value={new Set(movementRows.map((m) => m.warehouse_id)).size} tone="purple" />
         </div>
         <DataTable
-          columns={movementColumns(productName, warehouseName, batchName)}
+          columns={movementColumns(productName, productDetail, warehouseName, batchName, unitForRow)}
           rows={movementRows}
-          searchKeys={['notes', (m) => productName(m.product_id)]}
+          searchKeys={['notes', (m) => productDetail(m.product_id).text]}
           searchPlaceholder="Search product or movement notes…"
           filters={warehouseFilterSelect}
           pageSize={12}
@@ -126,25 +135,39 @@ export default function InventorySubview({ view }) {
 
   if (view === 'delivered' || view === 'pending') {
     const delivered = view === 'delivered';
-    const total = orderRows.reduce((sum, o) => sum + orderQuantity(o), 0);
+    // Order lines are grouped individually, since one order can hold products
+    // counted in different units.
+    const orderLines = orderRows.flatMap((o) => (Array.isArray(o.items) ? o.items : []));
+    const total = grouped(orderLines, (item) => Number(item.quantity) || 0);
     return (
       <div className="space-y-6">
         <PageHeader title={delivered ? 'Delivered Quantities' : 'Pending Order Quantities'} subtitle={delivered ? 'Quantities on completed customer orders' : 'Quantities committed to open customer orders'} />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-          <KPICard icon={delivered ? CheckCheck : Clock3} label="Total Quantity" value={`${formatNumber(total)} kg`} tone={delivered ? 'green' : 'amber'} />
+          <KPICard icon={delivered ? CheckCheck : Clock3} label="Total Quantity" value={<GroupedTotal groups={total} />} tone={delivered ? 'green' : 'amber'} />
           <KPICard icon={Package} label="Orders" value={orderRows.length} tone="blue" />
-          <KPICard icon={WarehouseIcon} label="Average per Order" value={`${formatNumber(orderRows.length ? total / orderRows.length : 0)} kg`} tone="purple" />
+          <KPICard icon={WarehouseIcon} label="Products on these orders" value={new Set(orderLines.map((i) => i.product_id)).size} sub="an order can mix units, so there is no single average" tone="purple" />
         </div>
         <DataTable
           columns={[
             { key: 'order_number', label: 'Order' },
             { key: 'status', label: 'Status', render: (o) => <StatusBadge status={o.status} /> },
-            { key: 'quantity', label: 'Quantity', render: (o) => `${formatNumber(orderQuantity(o))} kg` },
+            { key: 'items', label: 'Products', sortable: false, render: (o) => (
+              <div className="space-y-1">
+                {(Array.isArray(o.items) ? o.items : []).map((item, i) => (
+                  <ProductCell
+                    key={item.id ?? i}
+                    detail={productDetail(item.product_id)}
+                    sub={<div className="text-xs text-gray-400">{formatNumber(item.quantity)} {unitForRow(item.product_id)}</div>}
+                  />
+                ))}
+              </div>
+            )},
+            { key: 'quantity', label: 'Quantity', render: (o) => <GroupedTotal groups={grouped(Array.isArray(o.items) ? o.items : [], (item) => Number(item.quantity) || 0)} /> },
             { key: 'created_at', label: 'Date', render: (o) => formatDateTime(o.created_at) },
             { key: 'notes', label: 'Notes' },
           ]}
-          rows={orderRows.map((o) => ({ ...o, quantity: orderQuantity(o) }))}
-          searchKeys={['order_number', 'status', 'notes']}
+          rows={orderRows}
+          searchKeys={['order_number', 'status', 'notes', (o) => (Array.isArray(o.items) ? o.items : []).map((item) => productDetail(item.product_id).text).join(' ')]}
           searchPlaceholder="Search order…"
           pageSize={12}
           emptyHint={`No ${delivered ? 'delivered' : 'pending'} order quantities found.`}
@@ -159,7 +182,7 @@ export default function InventorySubview({ view }) {
     reserved: { title: 'Reserved Stock', subtitle: 'Stock committed to customer orders', icon: Clock3, tone: 'amber', value: (i) => i.reserved_qty, label: 'Reserved' },
     damaged: { title: 'Damaged Stock', subtitle: 'Stock recorded as damaged and unavailable for sale', icon: ShieldAlert, tone: 'red', value: (i) => i.damaged_qty, label: 'Damaged' },
   }[view] ?? { title: 'Inventory', subtitle: 'Inventory by product, batch and warehouse', icon: Package, tone: 'blue', value: (i) => i.quantity, label: 'Quantity' };
-  const total = stateRows.reduce((sum, i) => sum + (Number(stateConfig.value(i)) || 0), 0);
+  const total = grouped(stateRows, (i) => Number(stateConfig.value(i)) || 0);
   const placementType = {
     quarantined: 'quarantine',
     reserved: 'reserve',
@@ -197,26 +220,31 @@ export default function InventorySubview({ view }) {
         subtitle={stateConfig.subtitle}
         actions={placementType ? <Button onClick={() => setPlacement(placementType)} disabled={!placeableRows.length}>Place item in {stateConfig.label.toLowerCase()}</Button> : undefined}
       />
-      <KPICard icon={stateConfig.icon} label={stateConfig.label} value={`${formatNumber(total)} kg`} tone={stateConfig.tone} />
+      <KPICard icon={stateConfig.icon} label={stateConfig.label} value={<GroupedTotal groups={total} />} tone={stateConfig.tone} />
       <DataTable
         columns={view === 'current-stock' && groupCurrentStock ? [
-          { key: 'product_id', label: 'Product', render: (i) => <span className="font-semibold text-gray-700">{productName(i.product_id)}</span> },
+          { key: 'product_id', label: 'Product', render: (i) => <ProductCell detail={productDetail(i.product_id)} /> },
           { key: 'warehouse_id', label: 'Warehouse', render: (i) => warehouseName(i.warehouse_id) },
-          { key: 'on_hand', label: 'On Hand Total', render: (i) => `${formatNumber(i.on_hand)} kg` },
-          { key: 'reserved_qty', label: 'Total Reserved', render: (i) => `${formatNumber(i.reserved_qty)} kg` },
-          { key: 'quarantined_qty', label: 'Total Quarantined', render: (i) => `${formatNumber(i.quarantined_qty)} kg` },
-          { key: 'available', label: 'Available Total for sale', render: (i) => <span className="font-semibold text-green-700">{formatNumber(i.available)} kg</span> },
+          { key: 'on_hand', label: 'On Hand Total', render: (i) => `${formatNumber(i.on_hand)} ${unitForRow(i.product_id)}` },
+          { key: 'reserved_qty', label: 'Total Reserved', render: (i) => `${formatNumber(i.reserved_qty)} ${unitForRow(i.product_id)}` },
+          { key: 'quarantined_qty', label: 'Total Quarantined', render: (i) => `${formatNumber(i.quarantined_qty)} ${unitForRow(i.product_id)}` },
+          { key: 'available', label: 'Available Total for sale', render: (i) => <span className="font-semibold text-green-700">{formatNumber(i.available)} {unitForRow(i.product_id)}</span> },
           { key: 'stock_records', label: 'Records', render: (i) => <Button size="sm" variant="secondary" onClick={() => setRecordGroup(i)}>View {i.stock_records}</Button> },
         ] : [
-          { key: 'product_id', label: 'Product', render: (i) => <div><div className="font-semibold text-gray-700">{productName(i.product_id)}</div><div className="font-mono text-xs text-gray-400">{batchName(i.batch_id)}</div></div> },
+          { key: 'product_id', label: 'Product', render: (i) => (
+            <ProductCell
+              detail={productDetail(i.product_id)}
+              sub={<div className="font-mono text-xs text-gray-400">{batchName(i.batch_id)}</div>}
+            />
+          )},
           { key: 'warehouse_id', label: 'Warehouse', render: (i) => warehouseName(i.warehouse_id) },
-          { key: 'quantity', label: 'On Hand', render: (i) => `${formatNumber(i.quantity)} kg` },
-          { key: 'state_quantity', label: stateConfig.label, render: (i) => <span className="font-semibold text-green-700">{formatNumber(stateConfig.value(i))} kg</span> },
+          { key: 'quantity', label: 'On Hand', render: (i) => `${formatNumber(i.quantity)} ${unitForRow(i.product_id)}` },
+          { key: 'state_quantity', label: stateConfig.label, render: (i) => <span className="font-semibold text-green-700">{formatNumber(stateConfig.value(i))} {unitForRow(i.product_id)}</span> },
           { key: 'updated_at', label: 'Updated', render: (i) => formatDateTime(i.updated_at) },
           ...(['reserved', 'quarantined'].includes(view) ? [{ key: 'restore', label: '', sortable: false, render: (i) => <Button size="sm" variant="secondary" disabled={view === 'reserved' && restorableReservedQty(i) <= 0} onClick={() => setRestoreRow(i)}>Restore to available</Button> }] : []),
         ]}
         rows={view === 'current-stock' && groupCurrentStock ? groupedCurrentStock : stateRows}
-        searchKeys={[(i) => productName(i.product_id), (i) => warehouseName(i.warehouse_id)]}
+        searchKeys={[(i) => productDetail(i.product_id).text, (i) => warehouseName(i.warehouse_id)]}
         searchPlaceholder="Search product or warehouse…"
         filters={warehouseFilterSelect}
         pageSize={12}
@@ -229,6 +257,7 @@ export default function InventorySubview({ view }) {
         productName={productName}
         warehouseName={warehouseName}
         batchName={batchName}
+        unitFor={unitForRow}
         onClose={() => setPlacement(null)}
         onSubmit={placeStock}
       />
@@ -237,11 +266,13 @@ export default function InventorySubview({ view }) {
         productName={productName}
         warehouseName={warehouseName}
         batchName={batchName}
+        unitFor={unitForRow}
         onClose={() => setRecordGroup(null)}
       />
       <RestoreStockModal
         row={restoreRow}
         type={view === 'quarantined' ? 'quarantined' : 'reserved'}
+        unit={restoreRow ? unitForRow(restoreRow.product_id) : 'kg'}
         maxQuantity={restoreRow && view === 'reserved' ? restorableReservedQty(restoreRow) : Number(restoreRow?.quarantined_qty) || 0}
         onClose={() => setRestoreRow(null)}
         onSubmit={(data) => {
@@ -260,7 +291,7 @@ export default function InventorySubview({ view }) {
   );
 }
 
-function StockPlacementModal({ type, rows, productName, warehouseName, batchName, onClose, onSubmit }) {
+function StockPlacementModal({ type, rows, productName, warehouseName, batchName, unitFor = () => 'kg', onClose, onSubmit }) {
   const [form, setForm] = useState({ inventory_id: '', quantity: '', notes: '' });
   const selected = rows.find((row) => row.id === form.inventory_id);
   const label = { reserve: 'Reserved', quarantine: 'Quarantined', damage: 'Damaged' }[type];
@@ -271,9 +302,9 @@ function StockPlacementModal({ type, rows, productName, warehouseName, batchName
       <form onSubmit={(event) => { event.preventDefault(); onSubmit(form); }} className="space-y-4">
         <Select label="Available inventory item" value={form.inventory_id} onChange={(event) => setForm((current) => ({ ...current, inventory_id: event.target.value, quantity: '' }))} required>
           <option value="">Select an item…</option>
-          {rows.map((row) => <option key={row.id} value={row.id}>{productName(row.product_id)} · {batchName(row.batch_id)} · {warehouseName(row.warehouse_id)} ({formatNumber(availableQty(row))} kg available)</option>)}
+          {rows.map((row) => <option key={row.id} value={row.id}>{productName(row.product_id)} · {batchName(row.batch_id)} · {warehouseName(row.warehouse_id)} ({formatNumber(availableQty(row))} {unitFor(row.product_id)} available)</option>)}
         </Select>
-        <Input label="Quantity (kg)" type="number" min="0.01" step="0.01" max={selected ? availableQty(selected) : undefined} value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} required />
+        <Input label={`Quantity (${selected ? unitFor(selected.product_id) : 'unit'})`} type="number" min="0.01" step="0.01" max={selected ? availableQty(selected) : undefined} value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} required />
         <Textarea label="Notes / reason" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} required={type === 'quarantine'} />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
@@ -284,20 +315,20 @@ function StockPlacementModal({ type, rows, productName, warehouseName, batchName
   );
 }
 
-function StockRecordsModal({ group, productName, warehouseName, batchName, onClose }) {
+function StockRecordsModal({ group, productName, warehouseName, batchName, unitFor = () => 'kg', onClose }) {
   if (!group) return null;
   return (
     <Modal open onClose={onClose} title={`Stock records — ${productName(group.product_id)}`}>
       <div className="space-y-3">
-        <p className="text-sm text-gray-500">{warehouseName(group.warehouse_id)} · {formatNumber(group.available)} kg available total</p>
+        <p className="text-sm text-gray-500">{warehouseName(group.warehouse_id)} · {formatNumber(group.available)} {unitFor(group.product_id)} available total</p>
         <div className="overflow-x-auto rounded-xl border border-gray-100">
           <table className="w-full text-left text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500"><tr><th className="px-3 py-2">Stock record</th><th className="px-3 py-2">Batch</th><th className="px-3 py-2">On hand</th><th className="px-3 py-2">Available</th><th className="px-3 py-2">Updated</th></tr></thead>
             <tbody>{group.records.map((record) => <tr key={record.id} className="border-t border-gray-100">
               <td className="px-3 py-2 font-mono text-gray-500" title={record.id}>{String(record.id).slice(0, 8)}</td>
               <td className="px-3 py-2 font-mono text-gray-600">{batchName(record.batch_id)}</td>
-              <td className="px-3 py-2">{formatNumber(record.quantity)} kg</td>
-              <td className="px-3 py-2 font-semibold text-green-700">{formatNumber(availableQty(record))} kg</td>
+              <td className="px-3 py-2">{formatNumber(record.quantity)} {unitFor(record.product_id)}</td>
+              <td className="px-3 py-2 font-semibold text-green-700">{formatNumber(availableQty(record))} {unitFor(record.product_id)}</td>
               <td className="px-3 py-2 text-gray-500">{formatDateTime(record.updated_at)}</td>
             </tr>)}</tbody>
           </table>
@@ -308,17 +339,16 @@ function StockRecordsModal({ group, productName, warehouseName, batchName, onClo
   );
 }
 
-function RestoreStockModal({ row, type, maxQuantity, onClose, onSubmit }) {
+function RestoreStockModal({ row, type, maxQuantity, unit = 'kg', onClose, onSubmit }) {
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   if (!row) return null;
-  const label = type === 'quarantined' ? 'quarantined_qty' : 'reserved_qty';
   const title = type === 'quarantined' ? 'quarantined' : 'reserved';
   return (
     <Modal open onClose={onClose} title={`Restore ${title} stock`}>
       <form onSubmit={(event) => { event.preventDefault(); onSubmit({ quantity, notes }); }} className="space-y-4">
-        <p className="text-sm text-gray-600">Move stock back to available for sale. Up to {formatNumber(maxQuantity)} kg can be restored from this batch.</p>
-        <Input label="Quantity to restore (kg)" type="number" min="0.01" step="0.01" max={maxQuantity} value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+        <p className="text-sm text-gray-600">Move stock back to available for sale. Up to {formatNumber(maxQuantity)} {unit} can be restored from this batch.</p>
+        <Input label={`Quantity to restore (${unit})`} type="number" min="0.01" step="0.01" max={maxQuantity} value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
         <Textarea label="Notes (optional)" value={notes} onChange={(event) => setNotes(event.target.value)} />
         <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Restore to available</Button></div>
       </form>
@@ -326,16 +356,17 @@ function RestoreStockModal({ row, type, maxQuantity, onClose, onSubmit }) {
   );
 }
 
-function orderQuantity(order) {
-  return Array.isArray(order?.items) ? order.items.reduce((sum, item) => sum + (Number(item?.quantity) || 0), 0) : 0;
-}
-
-function movementColumns(productName, warehouseName, batchName) {
+function movementColumns(productName, productDetail, warehouseName, batchName, unitFor = () => 'kg') {
   return [
     { key: 'created_at', label: 'Date', render: (m) => formatDateTime(m.created_at) },
-    { key: 'product_id', label: 'Product', render: (m) => <div><div className="font-medium text-gray-700">{productName(m.product_id)}</div><div className="font-mono text-xs text-gray-400">{batchName(m.batch_id)}</div></div> },
+    { key: 'product_id', label: 'Product', render: (m) => (
+      <ProductCell
+        detail={productDetail(m.product_id)}
+        sub={<div className="font-mono text-xs text-gray-400">{batchName(m.batch_id)}</div>}
+      />
+    )},
     { key: 'movement_type', label: 'Type', render: (m) => <StatusBadge status={m.movement_type} /> },
-    { key: 'quantity', label: 'Quantity', render: (m) => `${formatNumber(m.quantity)} kg` },
+    { key: 'quantity', label: 'Quantity', render: (m) => `${formatNumber(m.quantity)} ${unitFor(m.product_id)}` },
     { key: 'warehouse_id', label: 'Warehouse', render: (m) => warehouseName(m.warehouse_id) },
     { key: 'notes', label: 'Notes' },
   ];

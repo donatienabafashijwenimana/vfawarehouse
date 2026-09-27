@@ -7,6 +7,9 @@ import { PageHeader } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { formatNumber, formatDateTime, prettyLabel } from '../../lib/format';
 import { movementDirection } from '../../lib/calc';
+import { unitLookup } from '../../lib/units';
+import { productDetailLookup } from '../../lib/productDetail';
+import { ProductCell } from '../../components/ui/ProductCell';
 
 const DIRECTION_TONE = {
   IN: 'text-green-600',
@@ -31,12 +34,16 @@ const DIRECTION_LABEL = {
 export default function StockMovements() {
   const movements = useStore((s) => s.movements);
   const products = useStore((s) => s.products);
+  const varieties = useStore((s) => s.varieties);
+  const seedClasses = useStore((s) => s.seedClasses);
+  const unitForMovement = unitLookup(products);
+  const productDetail = productDetailLookup(products, { varieties, seedClasses });
   const warehouses = useStore((s) => s.warehouses);
   const batches = useStore((s) => s.batches);
   const [typeFilter, setTypeFilter] = useState('');
   const [warehouseFilter, setWarehouseFilter] = useState('');
 
-  const productName = (id) => products.find((p) => p.id === id)?.name ?? '—';
+  const productName = (id) => productDetail(id).name || '—';
   const warehouseName = (id) => warehouses.find((w) => w.id === id)?.name ?? '—';
   const batchNo = (id) => batches.find((b) => b.id === id)?.batch_number ?? 'Bulk';
 
@@ -56,17 +63,17 @@ export default function StockMovements() {
         columns={[
           { key: 'created_at', label: 'Date', render: (m) => <span className="text-gray-500">{formatDateTime(m.created_at)}</span> },
           { key: 'product_id', label: 'Product', render: (m) => (
-            <div>
-              <div className="font-medium text-gray-700">{productName(m.product_id)}</div>
-              <div className="font-mono text-xs text-gray-400">{batchNo(m.batch_id)}</div>
-            </div>
+            <ProductCell
+              detail={productDetail(m.product_id)}
+              sub={<div className="font-mono text-xs text-gray-400">{batchNo(m.batch_id)}</div>}
+            />
           )},
           { key: 'movement_type', label: 'Type', render: (m) => <StatusBadge status={m.movement_type} /> },
           { key: 'direction', label: 'Effect on stock', sortable: false, render: (m) => {
             const direction = movementDirection(m.movement_type);
             return <span className={`text-xs font-semibold ${DIRECTION_TONE[direction]}`}>{DIRECTION_LABEL[direction]}</span>;
           } },
-          { key: 'quantity', label: 'Quantity', render: (m) => <span className="font-semibold text-gray-700">{formatNumber(m.quantity)} kg</span> },
+          { key: 'quantity', label: 'Quantity', render: (m) => <span className="font-semibold text-gray-700">{formatNumber(m.quantity)} {unitForMovement(m.product_id)}</span> },
           { key: 'warehouse_id', label: 'Warehouse', render: (m) => <span className="text-gray-600">{warehouseName(m.warehouse_id)}</span> },
           { key: 'reference_type', label: 'Reference', render: (m) => (
             <span className="text-xs text-gray-400">
@@ -77,7 +84,7 @@ export default function StockMovements() {
           { key: 'created_by', label: 'By', render: (m) => <span className="text-gray-500">{m.created_by}</span> },
         ]}
         rows={rows}
-        searchKeys={['notes', 'created_by', (m) => productName(m.product_id)]}
+        searchKeys={['notes', 'created_by', (m) => productDetail(m.product_id).text]}
         searchPlaceholder="Search product, notes or user…"
         filters={
           <>

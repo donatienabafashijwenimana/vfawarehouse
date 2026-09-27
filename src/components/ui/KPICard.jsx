@@ -12,7 +12,7 @@ export function KPICard({ icon: Icon, label, value, sub, tone = 'green' }) {
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm font-medium text-gray-500">{label}</p>
-          <p className="mt-1 text-2xl font-bold text-gray-800">{value}</p>
+          <div className="mt-1 text-2xl font-bold text-gray-800">{value}</div>
           {sub && <p className="mt-1 text-xs text-gray-400">{sub}</p>}
         </div>
         <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${tones[tone] ?? tones.green}`}>

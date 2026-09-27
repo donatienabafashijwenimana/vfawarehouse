@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/ui/KPICard';
 import { useAction } from '../../hooks/useAction';
 import { formatNumber, formatDateTime, prettyLabel } from '../../lib/format';
 import { productionEfficiency } from '../../lib/calc';
+import { unitOf } from '../../lib/units';
 
 /**
  * Batch detail page — seed traceability (spec §38):
@@ -57,7 +58,16 @@ export default function BatchDetail() {
   const batchMovs = movements.filter((m) => m.reference_id === batch.id || m.batch_id === batch.id);
   const salesWithBatch = sales.filter((s) => s.items.some((it) => it.batch_id === batch.id));
 
-  const eff = productionEfficiency(batch.input_qty, batch.output_qty);
+  // A farmer plants one product and can finish with another, so the batch has two
+  // units: the input is counted in the planted product's, and everything produced
+  // — output, rejects, quality checks and the stock booked in — is counted in the
+  // output product's. Mixing the two on one card would be meaningless.
+  const outputProduct = products.find((p) => p.id === (batch.output_product_id ?? batch.product_id)) ?? product;
+  const unit = unitOf(product);
+  const outputUnit = unitOf(outputProduct);
+  const changedProduct = batch.output_product_id != null && batch.output_product_id !== batch.product_id;
+  // Output ÷ input only means something when both are the same product.
+  const eff = changedProduct ? null : productionEfficiency(batch.input_qty, batch.output_qty);
 
   return (
     <div className="space-y-6">
@@ -71,23 +81,32 @@ export default function BatchDetail() {
         actions={<><StatusBadge status={batch.status} /><StatusBadge status={batch.quality_status} /></>}
       />
 
+      {changedProduct && (
+        <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800">
+          Planted as <strong>{product?.name ?? '—'}</strong> ({unit}) and finished as <strong>{outputProduct?.name ?? '—'}</strong> ({outputUnit}).
+          Output of <strong>{formatNumber(batch.output_qty)} {outputUnit}</strong>
+          {Number(batch.rejected_qty) > 0 && <> and <strong>{formatNumber(batch.rejected_qty)} {outputUnit}</strong> rejected</>} was booked into
+          stock as {outputProduct?.name}. Efficiency is not shown because the input and the output are different products.
+        </div>
+      )}
+
       {/* Summary */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <div className="text-xs text-gray-400">Input</div>
-          <div className="mt-1 text-xl font-bold text-gray-800">{formatNumber(batch.input_qty)} kg</div>
+          <div className="mt-1 text-xl font-bold text-gray-800">{formatNumber(batch.input_qty)} {unit}</div>
         </div>
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-          <div className="text-xs text-gray-400">Output</div>
-          <div className="mt-1 text-xl font-bold text-green-700">{formatNumber(batch.output_qty)} kg</div>
+          <div className="text-xs text-gray-400">Output{changedProduct ? ` (${outputProduct?.name ?? '—'})` : ''}</div>
+          <div className="mt-1 text-xl font-bold text-green-700">{formatNumber(batch.output_qty)} {outputUnit}</div>
         </div>
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <div className="text-xs text-gray-400">Rejected</div>
-          <div className="mt-1 text-xl font-bold text-red-500">{formatNumber(batch.rejected_qty)} kg</div>
+          <div className="mt-1 text-xl font-bold text-red-500">{formatNumber(batch.rejected_qty)} {outputUnit}</div>
         </div>
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <div className="text-xs text-gray-400">Efficiency</div>
-          <div className={`mt-1 text-xl font-bold ${eff >= 80 ? 'text-green-600' : 'text-yellow-600'}`}>{eff > 0 ? `${eff}%` : '—'}</div>
+          <div className={`mt-1 text-xl font-bold ${eff != null && eff >= 80 ? 'text-green-600' : 'text-yellow-600'}`}>{eff != null && eff > 0 ? `${eff}%` : '—'}</div>
         </div>
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <div className="text-xs text-gray-400">Created by</div>
@@ -146,7 +165,7 @@ export default function BatchDetail() {
                     <StatusBadge status={q.status} />
                   </div>
                   <div className="mt-1 text-xs text-gray-400">
-                    {formatDateTime(q.inspection_date)} · Grade {q.grade} · Accepted {formatNumber(q.accepted_qty)} kg · Rejected {formatNumber(q.rejected_qty)} kg
+                    {formatDateTime(q.inspection_date)} · Grade {q.grade} · Accepted {formatNumber(q.accepted_qty)} {outputUnit} · Rejected {formatNumber(q.rejected_qty)} {outputUnit}
                   </div>
                   {q.comments && <p className="mt-2 text-sm text-gray-600">{q.comments}</p>}
                 </div>
@@ -159,6 +178,21 @@ export default function BatchDetail() {
         <div className="space-y-6">
           <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
             <h3 className="mb-3 font-semibold text-gray-700">Warehouse location &amp; stock</h3>
+            {/* The warehouse the batch records, and the stock that is supposed to be
+                sitting in it. The two are shown together because a disagreement
+                between them is the thing worth noticing: the batch names where its
+                output is, and the rows below are where that output actually is. */}
+            <div className="mb-3 flex items-center justify-between rounded-xl bg-gray-50 px-4 py-2.5">
+              <div>
+                <div className="text-xs text-gray-400">Storage warehouse</div>
+                <div className="text-sm font-semibold text-gray-700">
+                  {batch.warehouse_id ? (warehouses.find((w) => w.id === batch.warehouse_id)?.name ?? 'Unknown warehouse') : 'Not set'}
+                </div>
+              </div>
+              {batchInv.some((inv) => inv.warehouse_id !== batch.warehouse_id) && (
+                <span className="text-xs text-amber-600">Stock is in another warehouse</span>
+              )}
+            </div>
             {batchInv.length === 0 ? (
               <p className="py-4 text-center text-sm text-gray-400">No stock from this batch in any warehouse.</p>
             ) : (
@@ -171,7 +205,7 @@ export default function BatchDetail() {
                         Reserved {inv.reserved_qty ?? 0} · Quarantined {inv.quarantined_qty ?? 0} · Damaged {inv.damaged_qty ?? 0}
                       </div>
                     </div>
-                    <div className="text-sm font-bold text-gray-700">{formatNumber(inv.quantity)} kg</div>
+                    <div className="text-sm font-bold text-gray-700">{formatNumber(inv.quantity)} {outputUnit}</div>
                   </div>
                 ))}
               </div>
@@ -191,7 +225,7 @@ export default function BatchDetail() {
                       <div className="text-xs text-gray-400">{customers.find((c) => c.id === s.customer_id)?.name ?? '—'}</div>
                     </div>
                     <div className="text-xs text-gray-500">
-                      {s.items.filter((it) => it.batch_id === batch.id).reduce((sum, it) => sum + it.quantity, 0)} kg
+                      {s.items.filter((it) => it.batch_id === batch.id).reduce((sum, it) => sum + it.quantity, 0)} {outputUnit}
                     </div>
                   </div>
                 ))}
@@ -213,7 +247,7 @@ export default function BatchDetail() {
                 <tr className="border-b border-gray-100 text-xs uppercase text-gray-400">
                   <th className="px-3 py-2">Date</th>
                   <th className="px-3 py-2">Type</th>
-                  <th className="px-3 py-2">Qty (kg)</th>
+                  <th className="px-3 py-2">Qty ({outputUnit})</th>
                   <th className="px-3 py-2">Warehouse</th>
                   <th className="px-3 py-2">Notes</th>
                   <th className="px-3 py-2">By</th>
@@ -248,6 +282,7 @@ export default function BatchDetail() {
         open={qcOpen}
         onClose={() => setQcOpen(false)}
         batch={batch}
+        unit={outputUnit}
         onSubmit={(data) => { run(() => addQualityCheck({ ...data, batch_id: batch.id }), 'Quality check recorded'); setQcOpen(false); }}
       />
     </div>
@@ -268,7 +303,7 @@ function CompleteStageModal({ stage, onClose, onConfirm }) {
   );
 }
 
-function QcModal({ open, onClose, batch, onSubmit }) {
+function QcModal({ open, onClose, batch, unit = 'kg', onSubmit }) {
   const [form, setForm] = useState({
     inspection_date: new Date().toISOString().slice(0, 10),
     status: 'APPROVED',
@@ -292,8 +327,8 @@ function QcModal({ open, onClose, batch, onSubmit }) {
           <Select label="Grade" value={form.grade} onChange={set('grade')}>
             {['A', 'B', 'C'].map((g) => <option key={g} value={g}>{g}</option>)}
           </Select>
-          <Input label="Accepted (kg)" type="number" min="0" value={form.accepted_qty} onChange={set('accepted_qty')} required />
-          <Input label="Rejected (kg)" type="number" min="0" value={form.rejected_qty} onChange={set('rejected_qty')} />
+          <Input label={`Accepted (${unit})`} type="number" min="0" value={form.accepted_qty} onChange={set('accepted_qty')} required />
+          <Input label={`Rejected (${unit})`} type="number" min="0" value={form.rejected_qty} onChange={set('rejected_qty')} />
         </div>
         <Textarea label="Comments" value={form.comments} onChange={set('comments')} />
         <div className="flex justify-end gap-2">

@@ -6,14 +6,21 @@ import { PageHeader, KPICard } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { formatNumber } from '../../lib/format';
 import { availableQty } from '../../lib/calc';
+import { groupByUnit, unitLookup } from '../../lib/units';
+import { productDetailLookup } from '../../lib/productDetail';
+import { ProductCell } from '../../components/ui/ProductCell';
+import { GroupedTotal } from '../../components/ui/UnitTotals';
 
 export default function InventoryReport() {
   const inventory = useStore((state) => state.inventory ?? []);
   const products = useStore((state) => state.products ?? []);
+  const varieties = useStore((state) => state.varieties ?? []);
+  const seedClasses = useStore((state) => state.seedClasses ?? []);
   const warehouses = useStore((state) => state.warehouses ?? []);
   const [warehouseFilter, setWarehouseFilter] = useState('');
 
-  const productName = (id) => products.find((product) => product.id === id)?.name ?? '—';
+  const productDetail = productDetailLookup(products, { varieties, seedClasses });
+  const productName = (id) => productDetail(id).name || '—';
   const warehouseName = (id) => warehouses.find((warehouse) => warehouse.id === id)?.name ?? '—';
   const filteredInventory = warehouseFilter
     ? inventory.filter((row) => row.warehouse_id === warehouseFilter)
@@ -48,25 +55,30 @@ export default function InventoryReport() {
     return [...groups.values()];
   }, [filteredInventory]);
 
-  const totals = reportRows.reduce((summary, row) => ({
-    on_hand: summary.on_hand + row.on_hand,
-    reserved: summary.reserved + row.reserved,
-    quarantined: summary.quarantined + row.quarantined,
-    available: summary.available + row.available,
-  }), { on_hand: 0, reserved: 0, quarantined: 0, available: 0 });
+  // A report total across every product would add kilograms to bags, so each
+  // figure is grouped by unit and reported one line per unit. damaged is included
+  // here for the same reason it is accumulated per group below.
+  const unitForRow = unitLookup(products);
+  const totals = {
+    on_hand: groupByUnit(reportRows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf: (r) => r.on_hand }),
+    reserved: groupByUnit(reportRows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf: (r) => r.reserved }),
+    quarantined: groupByUnit(reportRows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf: (r) => r.quarantined }),
+    damaged: groupByUnit(reportRows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf: (r) => r.damaged }),
+    available: groupByUnit(reportRows, { unitOfRow: (r) => unitForRow(r.product_id), totalOf: (r) => r.available }),
+  };
 
   return (
     <div className="space-y-6">
       <PageHeader title="Inventory Report" subtitle="Stock totals grouped by product and warehouse" />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KPICard icon={Boxes} label="On Hand" value={`${formatNumber(totals.on_hand)} kg`} tone="blue" />
-        <KPICard icon={PackageCheck} label="Available for Sale" value={`${formatNumber(totals.available)} kg`} tone="green" />
-        <KPICard icon={WarehouseIcon} label="Reserved" value={`${formatNumber(totals.reserved)} kg`} tone="amber" />
-        <KPICard icon={ShieldAlert} label="Quarantined" value={`${formatNumber(totals.quarantined)} kg`} tone="purple" />
+        <KPICard icon={Boxes} label="On Hand" value={<GroupedTotal groups={totals.on_hand} />} tone="blue" />
+        <KPICard icon={PackageCheck} label="Available for Sale" value={<GroupedTotal groups={totals.available} />} tone="green" />
+        <KPICard icon={WarehouseIcon} label="Reserved" value={<GroupedTotal groups={totals.reserved} />} tone="amber" />
+        <KPICard icon={ShieldAlert} label="Quarantined" value={<GroupedTotal groups={totals.quarantined} />} tone="purple" />
       </div>
       <DataTable
         columns={[
-          { key: 'product_id', label: 'Product', render: (row) => <span className="font-semibold text-gray-700">{productName(row.product_id)}</span> },
+          { key: 'product_id', label: 'Product', render: (row) => <ProductCell detail={productDetail(row.product_id)} /> },
           { key: 'warehouse_id', label: 'Warehouse', render: (row) => warehouseName(row.warehouse_id) },
           { key: 'on_hand', label: 'On Hand Total', render: (row) => `${formatNumber(row.on_hand)} kg` },
           { key: 'reserved', label: 'Total Reserved', render: (row) => `${formatNumber(row.reserved)} kg` },
@@ -76,7 +88,7 @@ export default function InventoryReport() {
           { key: 'records', label: 'Stock Records' },
         ]}
         rows={reportRows}
-        searchKeys={[(row) => productName(row.product_id), (row) => warehouseName(row.warehouse_id)]}
+        searchKeys={[(row) => productDetail(row.product_id).text, (row) => warehouseName(row.warehouse_id)]}
         searchPlaceholder="Search product or warehouse…"
         filters={<FilterSelect value={warehouseFilter} onChange={setWarehouseFilter} placeholder="All warehouses" options={warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))} />}
         pageSize={12}

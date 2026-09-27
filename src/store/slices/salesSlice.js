@@ -84,6 +84,12 @@ export const salesSlice = (set, get) => ({
     if (!order) throw new Error('Order not found');
     if (order.status !== 'PENDING') throw new Error('Only pending orders can be confirmed');
 
+    const isSellable = (batchId) => {
+      if (!batchId) return true; // batch-less stock has no quality check to wait for
+      const batch = get().batches.find((b) => b.id === batchId);
+      return !batch || batch.quality_status === 'APPROVED';
+    };
+
     // Validate the whole order before reserving anything, so a short line
     // cannot leave earlier lines partially reserved.
     const allocations = [];
@@ -92,9 +98,14 @@ export const salesSlice = (set, get) => ({
       const quantity = Number(item.quantity);
       if (!item.warehouse_id) throw new Error('Select a warehouse for every order item');
       if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Confirmed quantities must be positive');
+      // Reserving a batch whose quality is not approved would strand the order:
+      // the reservation is held, and createSale then refuses to invoice it.
+      // Allocating only sellable stock keeps the order confirmable from other
+      // batches instead of stranding it.
       const candidates = get().inventory.filter((row) =>
         row.product_id === item.product_id && row.warehouse_id === item.warehouse_id &&
-        (item.batch_id == null || (row.batch_id ?? null) === item.batch_id)
+        (item.batch_id == null || (row.batch_id ?? null) === item.batch_id) &&
+        isSellable(row.batch_id)
       );
       let outstanding = quantity;
       for (const stock of candidates) {
@@ -112,7 +123,25 @@ export const salesSlice = (set, get) => ({
         }
         if (outstanding <= 0) break;
       }
-      if (outstanding > 0) throw new Error('Insufficient available stock to confirm this order');
+      if (outstanding > 0) {
+        // The shortfall is often the quality gate rather than a lack of stock, so
+        // say which it is instead of leaving the operator to guess.
+        const blocked = get().inventory.filter((row) =>
+          row.product_id === item.product_id && row.warehouse_id === item.warehouse_id &&
+          (item.batch_id == null || (row.batch_id ?? null) === item.batch_id) &&
+          !isSellable(row.batch_id) && availableQty(row) > 0
+        );
+        if (blocked.length) {
+          const names = blocked
+            .map((row) => {
+              const batch = get().batches.find((b) => b.id === row.batch_id);
+              return `${batch?.batch_number ?? 'a batch'} (${batch?.quality_status === 'PENDING' ? 'no quality check yet' : batch?.quality_status})`;
+            })
+            .join(', ');
+          throw new Error(`Record a quality check approving ${names} before this order can be confirmed against it.`);
+        }
+        throw new Error('Insufficient available stock to confirm this order');
+      }
     }
 
     for (const item of allocations) {
@@ -194,20 +223,33 @@ export const salesSlice = (set, get) => ({
   },
 
   /**
-   * Create a sale from an order (or standalone): decreases stock, computes
-   * totals, sets payment status (§36). Prevents overselling.
+   * Record a delivery by invoicing the order it fulfils (§22, §36): decreases stock,
+   * computes totals, sets payment status. Prevents overselling.
    *
-   * When fulfilling an order whose stock was reserved at confirmation, each
-   * SALE line is paired with a RELEASE so reserved_qty is not permanently
-   * leaked (§36: cancel releases, complete converts reservation into a sale).
+   * When fulfilling an order whose stock was reserved at confirmation, each SALE line
+   * is paired with a RELEASE so reserved_qty is not permanently leaked (§36: cancel
+   * releases, complete converts reservation into a sale).
+   *
+   * The order is required. It is what reserved the stock, what carries the price the
+   * customer agreed, and what the invoice is traced back to. The standalone sale form
+   * that used to call this with no order could sell stock nothing had reserved —
+   * taking it from the unreserved balance and leaving confirmed orders short — and
+   * produced an invoice with no order behind it. Refusing the orderless call here
+   * rather than only deleting the button means any future caller is stopped too.
    */
-  createSale({ customer_id, items, discount = 0, order_id = null, notes = '' }) {
+  createSale({ customer_id, items, discount = 0, order_id, notes = '' }) {
     const products = get().products;
-    const order = order_id ? get().orders.find((o) => o.id === order_id) : null;
-    if (order_id && !order) throw new Error('Order not found');
-    if (order && ['COMPLETED', 'CANCELLED'].includes(order.status)) {
+    if (!order_id) {
+      throw new Error('A sale must be recorded by delivering an order. Use the Deliver action on the order.');
+    }
+    const order = get().orders.find((o) => o.id === order_id);
+    if (!order) throw new Error('Order not found');
+    if (['COMPLETED', 'CANCELLED'].includes(order.status)) {
       throw new Error(`Cannot create a sale for a ${order.status.toLowerCase()} order`);
     }
+    // Taken from the order rather than the caller, so an invoice cannot end up
+    // billing one customer for another customer's delivery.
+    customer_id = order.customer_id;
 
     let subtotal = 0;
     const saleItems = items.map((it) => {
@@ -222,7 +264,7 @@ export const salesSlice = (set, get) => ({
 
     // Reservations held by this order — stock already earmarked at confirm.
     const reservedByLine = new Map();
-    if (order && ['CONFIRMED', 'PROCESSING', 'READY'].includes(order.status)) {
+    if (['CONFIRMED', 'PROCESSING', 'READY'].includes(order.status)) {
       for (const item of order.items) {
         const key = `${item.product_id}:${item.batch_id ?? 'bulk'}:${item.warehouse_id ?? get().warehouses[0]?.id}`;
         reservedByLine.set(key, (reservedByLine.get(key) ?? 0) + Number(item.quantity));
@@ -244,12 +286,32 @@ export const salesSlice = (set, get) => ({
         (row) => row.product_id === req.product_id && (row.batch_id ?? null) === (req.batch_id ?? null) && row.warehouse_id === req.warehouse_id
       );
       const reserved = reservedByLine.get(`${req.product_id}:${req.batch_id ?? 'bulk'}:${req.warehouse_id}`) ?? 0;
-      if (order && ['CONFIRMED', 'PROCESSING', 'READY'].includes(order.status) && req.quantity > reserved) {
+      if (['CONFIRMED', 'PROCESSING', 'READY'].includes(order.status) && req.quantity > reserved) {
         throw new Error('Delivered quantity cannot exceed the confirmed order quantity');
       }
       if (!stock || availableQty(stock) + reserved < req.quantity) {
         throw new Error('Insufficient available stock to record this sale (§37: negative stock is not allowed)');
       }
+    }
+
+    // Unapproved production cannot leave the warehouse. A batch that is still
+    // PENDING has no quality check, REJECTED or QUARANTINED has failed one, and
+    // all three are refused here with the batch named, so the operator knows
+    // which check is outstanding. Stock with no batch is not traceable to a batch
+    // and has no check to wait for.
+    const unapproved = requested.values().filter((req) => {
+      if (!req.batch_id) return false;
+      const batch = get().batches.find((b) => b.id === req.batch_id);
+      return batch && batch.quality_status !== 'APPROVED';
+    });
+    if (unapproved.length) {
+      const names = unapproved
+        .map((req) => {
+          const batch = get().batches.find((b) => b.id === req.batch_id);
+          return `${batch.batch_number} (${batch.quality_status === 'PENDING' ? 'no quality check yet' : batch.quality_status})`;
+        })
+        .join(', ');
+      throw new Error(`Record a quality check approving ${names} before selling from it.`);
     }
 
     // Decrease stock for every line (§36). For order fulfilment, release the
@@ -271,7 +333,7 @@ export const salesSlice = (set, get) => ({
             quantity: releaseQty,
             reference_type: 'order',
             reference_id: order_id,
-            notes: `Reservation converted to sale${order ? ` ${order.order_number}` : ''}`,
+            notes: `Reservation converted to sale ${order.order_number}`,
           });
           reservedByLine.set(key, reserved - releaseQty);
         }
@@ -298,13 +360,11 @@ export const salesSlice = (set, get) => ({
       total,
       // Carry any prepayment made on the order through to the invoice
       // instead of re-entering it as an UNPAID sale (§23).
-      paid_amount: order ? Math.min(Number(order.paid_amount) || 0, total) : 0,
-      payment_status: order
-        ? paymentStatus(total, Math.min(Number(order.paid_amount) || 0, total))
-        : 'UNPAID',
+      paid_amount: Math.min(Number(order.paid_amount) || 0, total),
+      payment_status: paymentStatus(total, Math.min(Number(order.paid_amount) || 0, total)),
       notes,
       sale_date: new Date().toISOString().slice(0, 10),
-      order_number: order?.order_number ?? null,
+      order_number: order.order_number,
       created_by: get().profile?.fullName ?? '—',
       created_by_id: get().profile?.id,
       created_at: nowISO(),
@@ -314,7 +374,7 @@ export const salesSlice = (set, get) => ({
     // Attach the order's advance to the new invoice so the payment history
     // shows where the money came from (link the existing entry, create one
     // if an order-level advance was recorded without a lien).
-    if (order && Number(order.paid_amount) > 0) {
+    if (Number(order.paid_amount) > 0) {
       const advance = Math.min(Number(order.paid_amount) || 0, total);
       const partner = get().payments.find((p) => p.order_id === order.id && !p.sale_id);
       if (partner) {
@@ -334,12 +394,12 @@ export const salesSlice = (set, get) => ({
       }
     }
 
-    if (order) {
-      // Complete the order directly — COMPLETED is a store-managed terminal
-      // state reached via invoicing, not a manual transition.
-      get().updateOrder(order.id, { status: 'COMPLETED' });
-      get().logAction(`Order ${order.order_number} completed via invoice ${sale.invoice_number}`, 'Orders');
-    }
+    // Complete the order directly — COMPLETED is a store-managed terminal state
+    // reached via invoicing, not a manual transition. Unconditional now that an
+    // order is required, which is also what stops a second invoice being raised
+    // against the same order.
+    get().updateOrder(order.id, { status: 'COMPLETED' });
+    get().logAction(`Order ${order.order_number} completed via invoice ${sale.invoice_number}`, 'Orders');
     get().logAction(`Sale ${sale.invoice_number} created (${sale.total} RWF)`, 'Sales');
     get().pushNotification('success', 'Sale recorded', `Invoice ${sale.invoice_number} created.`);
     return sale;

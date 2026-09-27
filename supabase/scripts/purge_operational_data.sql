@@ -1,5 +1,26 @@
 -- Purge operational data, keep auth and reference data.
 --
+-- NOT A MIGRATION. This file used to live in supabase/migrations/ as
+-- 20260926000003_purge_operational_data.sql, and it does not belong there.
+--
+-- A migration is replayed, in version order, against every environment that
+-- applies the chain, and it describes a change to the *schema*. This describes
+-- the opposite: a one-off, irreversible deletion of whatever operational data an
+-- environment happens to hold. It belongs to a single throwaway environment at a
+-- single moment, which is not something a migration can express.
+--
+-- Keeping it in the chain was actively dangerous. It was never applied to the
+-- production database, but it sat at a version older than the newest applied
+-- migration, so `supabase db push` treated it as an out-of-order file and refused
+-- to run without `--include-all`. That flag is the only way to apply a pending
+-- migration, so the database could not be migrated at all unless the operator also
+-- agreed to run the purge — which deletes every batch, inventory row, stock
+-- movement, order and sale. A routine `db push` and a destructive wipe were coupled
+-- together by nothing more than a file's location.
+--
+-- It is kept, and not deleted, because a fresh demo or test environment is
+-- legitimately reset this way. Run it deliberately, by hand, as below.
+--
 -- DELETES (irreversible):
 --   production_batches, production_stages, quality_checks,
 --   inventory, stock_movements,
@@ -13,11 +34,11 @@
 --   categories, seed_classes, varieties, products, warehouses,
 --   expense_categories, customers, settings
 --
--- SAFETY RAIL: refuses to run unless the session opts in, so an accidental
--- `supabase db push` against a fresh environment cannot wipe it.
+-- SAFETY RAIL: refuses to run unless the session opts in, so an accidental run
+-- against a real environment cannot wipe it.
 --   psql:      psql "$DB_URL" -v ON_ERROR_STOP=1 \
 --                -c "set app.allow_purge = 'yes'" \
---                -f supabase/migrations/20260926000003_purge_operational_data.sql
+--                -f supabase/scripts/purge_operational_data.sql
 --   SQL editor: run `set app.allow_purge = 'yes';` in the SAME session first,
 --               then run this file. (Session settings do not persist across
 --               separate statements in the dashboard, so use one DO block or

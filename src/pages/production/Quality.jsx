@@ -24,6 +24,7 @@ export default function Quality() {
     const p = products.find((p) => p.id === b.product_id);
     return `${b.batch_number} — ${p?.name ?? ''}`;
   };
+  const unitOfBatch = (b) => products.find((p) => p.id === b?.product_id)?.unit ?? 'kg';
 
   const rows = statusFilter ? qualityChecks.filter((q) => q.status === statusFilter) : qualityChecks;
 
@@ -59,8 +60,8 @@ export default function Quality() {
           { key: 'inspector', label: 'Inspector' },
           { key: 'inspection_date', label: 'Date', render: (q) => <span className="text-gray-500">{formatDate(q.inspection_date)}</span> },
           { key: 'grade', label: 'Grade', render: (q) => <span className="font-bold text-gray-700">{q.grade}</span> },
-          { key: 'accepted_qty', label: 'Accepted', render: (q) => <span className="text-green-600">{formatNumber(q.accepted_qty)} kg</span> },
-          { key: 'rejected_qty', label: 'Rejected', render: (q) => <span className="text-red-500">{formatNumber(q.rejected_qty)} kg</span> },
+          { key: 'accepted_qty', label: 'Accepted', render: (q) => <span className="text-green-600">{formatNumber(q.accepted_qty)} {unitOfBatch(batches.find((b) => b.id === q.batch_id))}</span> },
+          { key: 'rejected_qty', label: 'Rejected', render: (q) => <span className="text-red-500">{formatNumber(q.rejected_qty)} {unitOfBatch(batches.find((b) => b.id === q.batch_id))}</span> },
           { key: 'status', label: 'Status', render: (q) => <StatusBadge status={q.status} /> },
           { key: 'comments', label: 'Comments', render: (q) => <span className="text-gray-500">{q.comments}</span> },
         ]}
@@ -82,6 +83,7 @@ export default function Quality() {
         modal={modal}
         onClose={() => setModal(null)}
         batches={completedBatches}
+        unit={unitOfBatch(modal?.batch)}
         onSubmit={(data) => {
           run(() => addQualityCheck({ ...data, batch_id: modal.batch.id }), 'Quality check recorded');
           setModal(null);
@@ -91,7 +93,7 @@ export default function Quality() {
   );
 }
 
-function QcModal({ modal, onClose, batches, onSubmit }) {
+function QcModal({ modal, onClose, batches, unit = 'kg', onSubmit }) {
   const [form, setForm] = useState({
     inspection_date: new Date().toISOString().slice(0, 10),
     status: 'APPROVED',
@@ -121,8 +123,8 @@ function QcModal({ modal, onClose, batches, onSubmit }) {
           <Select label="Grade" value={form.grade} onChange={set('grade')}>
             {['A', 'B', 'C'].map((g) => <option key={g} value={g}>{g}</option>)}
           </Select>
-          <Input label="Accepted (kg)" type="number" min="0" value={form.accepted_qty} onChange={set('accepted_qty')} required />
-          <Input label="Rejected (kg)" type="number" min="0" value={form.rejected_qty} onChange={set('rejected_qty')} />
+          <Input label={`Accepted (${unit})`} type="number" min="0" value={form.accepted_qty} onChange={set('accepted_qty')} required />
+          <Input label={`Rejected (${unit})`} type="number" min="0" value={form.rejected_qty} onChange={set('rejected_qty')} />
         </div>
         <Textarea label="Comments" value={form.comments} onChange={set('comments')} />
         <div className="flex justify-end gap-2">

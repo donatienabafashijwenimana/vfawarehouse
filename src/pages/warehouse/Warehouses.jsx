@@ -5,20 +5,27 @@ import { Button, Input, Textarea, Select, StatusBadge } from '../../components/u
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/KPICard';
 import { useAction } from '../../hooks/useAction';
-import { formatNumber } from '../../lib/format';
+import { groupByUnit, unitLookup } from '../../lib/units';
+import { GroupedTotal } from '../../components/ui/UnitTotals';
 
 const EMPTY = { name: '', location: '', description: '', manager: '', status: 'ACTIVE' };
 
 export default function Warehouses() {
   const warehouses = useStore((s) => s.warehouses);
   const inventory = useStore((s) => s.inventory);
+  const products = useStore((s) => s.products ?? []);
   const addWarehouse = useStore((s) => s.addWarehouse);
   const updateWarehouse = useStore((s) => s.updateWarehouse);
   const run = useAction();
   const [modal, setModal] = useState(null);
 
-  const stockOf = (wid) =>
-    inventory.filter((i) => i.warehouse_id === wid).reduce((s, i) => s + i.quantity, 0);
+  // Products are counted in their own units, so a warehouse's stock is reported
+  // one figure per unit rather than as one total that would add kg to bags.
+  const unitForRow = unitLookup(products);
+  const stockOf = (wid) => groupByUnit(
+    inventory.filter((i) => i.warehouse_id === wid),
+    { unitOfRow: (i) => unitForRow(i.product_id), totalOf: (i) => Number(i.quantity) || 0 }
+  );
 
   function save(form) {
     if (modal.mode === 'create') run(() => addWarehouse(form), 'Warehouse created');
@@ -48,7 +55,7 @@ export default function Warehouses() {
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="rounded-xl bg-green-50 px-3 py-2.5">
                 <div className="text-xs text-green-600">Total stock</div>
-                <div className="text-lg font-bold text-green-800">{formatNumber(stockOf(w.id))} kg</div>
+                <div className="text-lg font-bold text-green-800"><GroupedTotal groups={stockOf(w.id)} /></div>
               </div>
               <div className="rounded-xl bg-gray-50 px-3 py-2.5">
                 <div className="text-xs text-gray-400">Manager</div>

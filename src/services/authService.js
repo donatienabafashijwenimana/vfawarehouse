@@ -49,6 +49,26 @@ export async function createManagedUser({ fullName, email, password, role, statu
   return data.user;
 }
 
+export async function setCustomerPassword({ customerId, password }) {
+  const supabase = await requireSupabase();
+  const { data, error } = await supabase.functions.invoke('set-customer-password', {
+    body: { customerId, password },
+  });
+  if (error) {
+    // The edge function writes its refusals as { error }, which surfaces here as a
+    // generic FunctionsHttpError with the real reason buried in the response body.
+    // Without unwrapping it, every refusal reads as "Edge Function returned a
+    // non-2xx status code".
+    const response = error.context;
+    if (response instanceof Response) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error ?? error.message);
+    }
+    throw error;
+  }
+  return data;
+}
+
 export async function requestPasswordReset(email) {
   const supabase = await requireSupabase();
   const { error } = await supabase.auth.resetPasswordForEmail(email);

@@ -68,6 +68,39 @@ export const ROLES = {
 export const ROLE_PERMISSIONS = {
   manager: ALL_PERMISSION_CODES,
   customer: [],
+  // A staff user runs the day-to-day production and warehouse workflow, so they
+  // need the operational reads and writes for it. Completing a batch writes an
+  // inventory row as well as the batch, so inventory.adjust belongs here too:
+  // production_batches is gated on production.*, but the stock that completion
+  // books in is gated separately on inventory.* (see supabase/schema.sql).
+  // Anything that moves money, deletes records or manages people is left to a
+  // manager.
+  staff: [
+    PERMISSIONS.DASHBOARD_VIEW,
+    PERMISSIONS.PRODUCTS_VIEW,
+    PERMISSIONS.CATEGORIES_VIEW,
+    PERMISSIONS.VARIETIES_VIEW,
+    PERMISSIONS.CUSTOMERS_VIEW,
+    PERMISSIONS.CUSTOMERS_CREATE,
+    PERMISSIONS.CUSTOMERS_UPDATE,
+    PERMISSIONS.PRODUCTION_VIEW,
+    PERMISSIONS.PRODUCTION_CREATE,
+    PERMISSIONS.PRODUCTION_UPDATE,
+    PERMISSIONS.QUALITY_VIEW,
+    PERMISSIONS.QUALITY_CREATE,
+    PERMISSIONS.QUALITY_UPDATE,
+    PERMISSIONS.INVENTORY_VIEW,
+    PERMISSIONS.INVENTORY_UPDATE,
+    PERMISSIONS.INVENTORY_ADJUST,
+    PERMISSIONS.ORDERS_VIEW,
+    PERMISSIONS.ORDERS_CREATE,
+    PERMISSIONS.ORDERS_UPDATE,
+    PERMISSIONS.SALES_VIEW,
+    PERMISSIONS.SALES_CREATE,
+    PERMISSIONS.PAYMENTS_VIEW,
+    PERMISSIONS.PAYMENTS_CREATE,
+    PERMISSIONS.REPORTS_VIEW,
+  ],
 };
 
 export function hasPermission(perms = [], code) {

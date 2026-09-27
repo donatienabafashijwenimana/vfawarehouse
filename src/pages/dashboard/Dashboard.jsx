@@ -9,6 +9,8 @@ import {
 import { useStore } from '../../store/useStore';
 import { KPICard, ChartCard, PageHeader } from '../../components/ui/KPICard';
 import { CHART_COLORS, formatDate, formatRWF } from '../../lib/format';
+import { groupByUnit, unitLookup, unitOf } from '../../lib/units';
+import { GroupedTotal, GroupedTotalText } from '../../components/ui/UnitTotals';
 import { Link } from 'react-router-dom';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -27,9 +29,17 @@ export default function Dashboard() {
   const store = useStore();
   const profile = store.profile;
   const isCustomer = profile?.role === 'customer';
+  // Resolves a product_id on an inventory, movement or sale line to its unit.
+  const unitForInventory = unitLookup(store.products);
 
   const kpis = useMemo(() => {
-    const inventoryQty = store.inventory.reduce((sum, i) => sum + Math.max(0, i.quantity - (i.reserved_qty ?? 0) - (i.quarantined_qty ?? 0) - (i.damaged_qty ?? 0)), 0);
+    // Stock is counted in each product's own unit, so a company-wide figure is
+    // reported per unit rather than as one number that would add kg to bags.
+    const unitForProduct = unitLookup(store.products);
+    const inventoryQty = groupByUnit(store.inventory, {
+      unitOfRow: (i) => unitForProduct(i.product_id),
+      totalOf: (i) => Math.max(0, i.quantity - (i.reserved_qty ?? 0) - (i.quarantined_qty ?? 0) - (i.damaged_qty ?? 0)),
+    });
     const lowStock = store.products.filter((p) => {
       const total = store.inventory.filter((i) => i.product_id === p.id).reduce((s, i) => s + Math.max(0, i.quantity - (i.reserved_qty ?? 0) - (i.quarantined_qty ?? 0) - (i.damaged_qty ?? 0)), 0);
       return (p.minimum_stock ?? 0) > 0 && total <= p.minimum_stock;
@@ -47,7 +57,12 @@ export default function Dashboard() {
       paidTotal: store.payments.filter((payment) => !['PENDING', 'REJECTED'].includes(payment.status)).reduce((s, p) => s + (Number(p.amount) || 0), 0),
       expensesTotal: store.expenses.reduce((s, e) => s + e.amount, 0),
       pendingOrders: store.orders.filter((o) => o.status === 'PENDING' || o.status === 'CONFIRMED').length,
-      outputKg: store.batches.reduce((s, b) => s + (b.output_qty ?? 0), 0),
+      // Output is counted in the product the batch produced, which is not always
+      // the one it was planted as.
+      outputByUnit: groupByUnit(store.batches.filter((b) => b.status === 'COMPLETED'), {
+        unitOfRow: (b) => unitOf(store.products.find((p) => p.id === (b.output_product_id ?? b.product_id))),
+        totalOf: (b) => b.output_qty ?? 0,
+      }),
     };
   }, [store.users, store.customers, store.products, store.batches, store.inventory, store.sales, store.payments, store.expenses, store.orders]);
 
@@ -55,10 +70,20 @@ export default function Dashboard() {
     const months = last6Months();
     const fmtMonth = (iso) => (typeof iso === 'string' ? iso.slice(0, 7) : '');
 
-    const production = months.map(({ key, label }) => ({
-      month: label,
-      output: store.batches.filter((b) => fmtMonth(b.end_date ?? b.created_at) === key).reduce((s, b) => s + (b.output_qty ?? 0), 0),
-    }));
+    // A bar per unit. Kilograms and bags cannot share a bar the way they shared
+    // one "output (kg)" column, so each unit becomes its own series and a month
+    // with no output in a unit simply has no bar for it.
+    const outputUnitOf = (b) => unitOf(store.products.find((p) => p.id === (b.output_product_id ?? b.product_id)));
+    const outputUnits = [...new Set(store.batches.filter((b) => b.status === 'COMPLETED').map(outputUnitOf))];
+    const production = months.map(({ key, label }) => {
+      const row = { month: label };
+      for (const unit of outputUnits) {
+        row[unit] = store.batches
+          .filter((b) => b.status === 'COMPLETED' && fmtMonth(b.end_date ?? b.created_at) === key && outputUnitOf(b) === unit)
+          .reduce((s, b) => s + (b.output_qty ?? 0), 0);
+      }
+      return row;
+    });
 
     const salesByMonth = months.map(({ key, label }) => ({
       month: label,
@@ -66,19 +91,37 @@ export default function Dashboard() {
       expenses: store.expenses.filter((e) => fmtMonth(e.expense_date ?? e.created_at) === key).reduce((s, e) => s + e.amount, 0),
     }));
 
-    const byVariety = store.varieties.map((v, i) => ({
-      name: v.name,
-      value: store.inventory.filter((inv) => {
-        const p = store.products.find((p) => p.id === inv.product_id);
-        return p?.variety_id === v.id;
-      }).reduce((s, inv) => s + Math.max(0, inv.quantity - (inv.reserved_qty ?? 0) - (inv.quarantined_qty ?? 0) - (inv.damaged_qty ?? 0)), 0),
-      color: CHART_COLORS[i % CHART_COLORS.length],
-    })).filter((d) => d.value > 0);
+    // A share of stock only means something within one unit, so the variety
+    // breakdown is drawn once per unit instead of one pie that mixed them.
+    const available = (inv) => Math.max(0, inv.quantity - (inv.reserved_qty ?? 0) - (inv.quarantined_qty ?? 0) - (inv.damaged_qty ?? 0));
+    const unitsInStock = [...new Set(store.inventory.map((inv) => unitForInventory(inv.product_id)))];
+    const varietyByUnit = unitsInStock.map((unit) => ({
+      unit,
+      data: store.varieties.map((v, i) => ({
+        name: v.name,
+        value: store.inventory
+          .filter((inv) => unitForInventory(inv.product_id) === unit
+            && store.products.find((p) => p.id === inv.product_id)?.variety_id === v.id)
+          .reduce((s, inv) => s + available(inv), 0),
+        color: CHART_COLORS[i % CHART_COLORS.length],
+      })).filter((d) => d.value > 0),
+    })).filter((g) => g.data.length > 0);
 
-    const byProduct = store.products.map((p) => ({
-      name: p.name.replace(' Seed', '').replace('Certified ', '').replace('Basic ', ''),
-      value: store.sales.flatMap((s) => s.items).filter((it) => it.product_id === p.id).reduce((s, it) => s + it.quantity, 0),
-    })).filter((d) => d.value > 0);
+    // Same treatment for sales: one bar per unit, so a 40-bag line is not drawn
+    // against a 3,500 kg line on one axis.
+    const soldItems = store.sales.flatMap((s) => s.items);
+    const soldUnits = [...new Set(soldItems.map((it) => unitForInventory(it.product_id)))];
+    const byProduct = store.products
+      .map((p) => ({
+        name: p.name.replace(' Seed', '').replace('Certified ', '').replace('Basic ', ''),
+        unit: unitOf(p),
+        ...Object.fromEntries(soldUnits.map((unit) => [
+          unit,
+          soldItems.filter((it) => it.product_id === p.id && unitForInventory(it.product_id) === unit)
+            .reduce((s, it) => s + (it.quantity || 0), 0),
+        ])),
+      }))
+      .filter((d) => soldUnits.some((unit) => d[unit] > 0));
 
     const byCustomer = store.customers.map((c) => ({
       name: c.name.length > 18 ? `${c.name.slice(0, 18)}…` : c.name,
@@ -91,8 +134,10 @@ export default function Dashboard() {
       color: [CHART_COLORS[0], '#d93025', '#8b5cf6', '#ca9b35'][i],
     })).filter((d) => d.value > 0);
 
-    return { production, salesByMonth, byVariety, byProduct, byCustomer, quality };
+    return { production, productionUnits: outputUnits, salesByMonth, varietyByUnit, byProduct, soldUnits, byCustomer, quality };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.batches, store.sales, store.expenses, store.varieties, store.products, store.inventory, store.customers]);
+
 
   if (isCustomer) return <CustomerDashboard />;
 
@@ -107,8 +152,8 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KPICard icon={Users} label="Users" value={kpis.users} sub={`${kpis.staff} staff · ${store.customers.length} customers`} tone="blue" />
         <KPICard icon={Package} label="Products" value={kpis.products} sub={`${store.varieties.length} varieties`} tone="green" />
-        <KPICard icon={Factory} label="Production Batches" value={kpis.batches} sub={`${kpis.activeBatches} active · ${kpis.outputKg.toLocaleString()} kg output`} tone="purple" />
-        <KPICard icon={Boxes} label="Available Stock" value={`${kpis.inventoryQty.toLocaleString()} kg`} sub={`${kpis.lowStock} low-stock products`} tone={kpis.lowStock > 0 ? 'amber' : 'green'} />
+        <KPICard icon={Factory} label="Production Batches" value={kpis.batches} sub={`${kpis.activeBatches} active · ${GroupedTotalText({ groups: kpis.outputByUnit })} output`} tone="purple" />
+        <KPICard icon={Boxes} label="Available Stock" value={<GroupedTotal groups={kpis.inventoryQty} />} sub={`${kpis.lowStock} low-stock products`} tone={kpis.lowStock > 0 ? 'amber' : 'green'} />
       </div>
 
       {/* KPI row 2 */}
@@ -121,28 +166,51 @@ export default function Dashboard() {
 
       {/* Charts */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <ChartCard title="Monthly Production Output" subtitle="Finished seed (kg) by month" className="lg:col-span-2">
+        <ChartCard
+          title="Monthly Production Output"
+          subtitle={charts.productionUnits.length > 1
+            ? 'Finished output by month, one bar per unit'
+            : `Finished output (${charts.productionUnits[0] ?? 'kg'}) by month`}
+          className="lg:col-span-2"
+        >
           <ResponsiveContainer width="100%" height={230}>
             <BarChart data={charts.production}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="month" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey="output" fill="#2d9e2d" radius={[4, 4, 0, 0]} name="Output (kg)" />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {charts.productionUnits.map((unit, i) => (
+                <Bar key={unit} dataKey={unit} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} name={unit} />
+              ))}
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Stock by Variety" subtitle="Available inventory share">
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={charts.byVariety} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={75} innerRadius={45}>
-                {charts.byVariety.map((d) => <Cell key={d.name} fill={d.color} />)}
-              </Pie>
-              <Tooltip />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-            </PieChart>
-          </ResponsiveContainer>
+        <ChartCard
+          title="Stock by Variety"
+          subtitle={charts.varietyByUnit.length > 1
+            ? 'Available inventory share, one chart per unit'
+            : `Available inventory share (${charts.varietyByUnit[0]?.unit ?? 'kg'})`}
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {charts.varietyByUnit.map((group) => (
+              <div key={group.unit}>
+                {charts.varietyByUnit.length > 1 && (
+                  <div className="mb-1 text-center text-xs font-medium text-gray-500">{group.unit}</div>
+                )}
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie data={group.data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} innerRadius={42}>
+                      {group.data.map((d) => <Cell key={d.name} fill={d.color} />)}
+                    </Pie>
+                    <Tooltip />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ))}
+          </div>
         </ChartCard>
       </div>
 
@@ -175,14 +243,22 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ChartCard title="Sales by Product" subtitle="Quantity sold (kg)">
+        <ChartCard
+          title="Sales by Product"
+          subtitle={charts.soldUnits.length > 1
+            ? 'Quantity sold, one bar per unit'
+            : `Quantity sold (${charts.soldUnits[0] ?? 'kg'})`}
+        >
           <ResponsiveContainer width="100%" height={230}>
             <BarChart data={charts.byProduct} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis type="number" tick={{ fontSize: 11 }} />
               <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey="value" fill="#4db54d" radius={[0, 4, 4, 0]} name="Sold (kg)" />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {charts.soldUnits.map((unit, i) => (
+                <Bar key={unit} dataKey={unit} fill={CHART_COLORS[(i + 1) % CHART_COLORS.length]} radius={[0, 4, 4, 0]} name={unit} />
+              ))}
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

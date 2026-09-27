@@ -8,10 +8,17 @@ import { PageHeader } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
 import { formatDate } from '../../lib/format';
-import { ALL_PERMISSION_CODES } from '../../lib/permissions';
+import { ALL_PERMISSION_CODES, ROLE_PERMISSIONS } from '../../lib/permissions';
 import { createManagedUser, requestPasswordReset } from '../../services/authService';
 
-const EMPTY = { fullName: '', email: '', role: 'staff', password: '', status: 'ACTIVE', permissions: [] };
+// A new staff user starts on the role's default permissions rather than none:
+// row-level security denies a staff profile every production write when the list
+// is empty, and a denied write changes no rows without raising an error, so the
+// application would report a saved batch start that never reached the database.
+const EMPTY = {
+  fullName: '', email: '', role: 'staff', password: '', status: 'ACTIVE',
+  permissions: [...ROLE_PERMISSIONS.staff],
+};
 const MODULE_LABELS = {
   dashboard: 'Dashboard', users: 'Users', roles: 'Roles', products: 'Products', categories: 'Categories',
   varieties: 'Varieties', production: 'Production', quality: 'Quality', warehouses: 'Warehouses',

@@ -9,6 +9,8 @@ import { FilterSelect } from '../../components/ui/feedback';
 import { useAction } from '../../hooks/useAction';
 import { formatDate, formatNumber, formatRWF, prettyLabel } from '../../lib/format';
 import { availableQty, paymentStatus } from '../../lib/calc';
+import { productDetailLookup, productDetailLabel } from '../../lib/productDetail';
+import { ProductCell } from '../../components/ui/ProductCell';
 
 export default function Orders() {
   const store = useStore();
@@ -29,7 +31,8 @@ export default function Orders() {
   const rows = statusFilter ? allOrders.filter((o) => o.status === statusFilter) : allOrders;
 
   const customerName = (id) => store.customers.find((c) => c.id === id)?.name ?? '—';
-  const productName = (id) => store.products.find((p) => p.id === id)?.name ?? '—';
+  const productDetail = productDetailLookup(store.products, { varieties: store.varieties, seedClasses: store.seedClasses });
+  const productName = (id) => productDetail(id).name || '—';
 
   const canConfirm = !isCustomer;
 
@@ -71,6 +74,7 @@ export default function Orders() {
               {o.items.map((it, i) => (
                 <div key={i} className="text-xs">
                   <div>{it.quantity} × {productName(it.product_id)}</div>
+                  <div className="text-gray-400">{productDetail(it.product_id).qualifiers}</div>
                   {['CONFIRMED', 'PROCESSING', 'READY', 'COMPLETED'].includes(o.status) && (
                     <div className="font-medium text-gray-600">Unit price: {formatRWF(it.unit_price ?? 0)}/{store.products.find((product) => product.id === it.product_id)?.unit ?? 'unit'}</div>
                   )}
@@ -132,7 +136,7 @@ export default function Orders() {
           )},
         ].filter(Boolean)}
         rows={rows}
-        searchKeys={['order_number']}
+        searchKeys={['order_number', (o) => (Array.isArray(o.items) ? o.items : []).map((item) => productDetail(item.product_id).text).join(' ')]}
         searchPlaceholder="Search order number…"
         emptyHint={isCustomer ? 'No orders yet.' : 'No orders match these filters.'}
         filters={
@@ -219,6 +223,7 @@ function DeletePendingOrderModal({ order, onClose, onConfirm }) {
 function EditOrderModal({ order, onClose, onSubmit }) {
   const store = useStore();
   const pushToast = useStore((state) => state.pushToast);
+  const productDetail = productDetailLookup(store.products, { varieties: store.varieties, seedClasses: store.seedClasses });
   const [items, setItems] = useState(() => order?.items?.map((item) => ({ ...item, quantity: String(item.quantity), unit_price: String(item.unit_price ?? 0) })) ?? []);
   const [notes, setNotes] = useState(order?.notes ?? '');
   if (!order) return null;
@@ -255,7 +260,7 @@ function EditOrderModal({ order, onClose, onSubmit }) {
                 setItems((current) => current.map((line, i) => i === index ? { ...line, product_id: event.target.value, batch_id: null, warehouse_id: undefined, unit_price: String(product?.selling_price ?? line.unit_price ?? 0) } : line));
               }} required>
                 <option value="">Select product…</option>
-                {choices.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+                {choices.map((product) => <option key={product.id} value={product.id}>{productDetailLabel(productDetail(product.id))}</option>)}
               </Select>
               <Input label="Quantity (kg)" type="number" min="0.01" step="0.01" value={item.quantity} onChange={(event) => setItems((current) => current.map((line, i) => i === index ? { ...line, quantity: event.target.value } : line))} required />
               <Input label="Unit price (RWF)" type="number" min="0" step="0.01" value={item.unit_price} onChange={(event) => setItems((current) => current.map((line, i) => i === index ? { ...line, unit_price: event.target.value } : line))} required />
@@ -278,6 +283,7 @@ function EditOrderModal({ order, onClose, onSubmit }) {
 function CreateOrderModal({ open, onClose }) {
   const store = useStore();
   const pushToast = useStore((s) => s.pushToast);
+  const productDetail = productDetailLookup(store.products, { varieties: store.varieties, seedClasses: store.seedClasses });
   const isCustomer = store.profile?.role === 'customer';
   const orderableProducts = store.products.filter((product) => product.status === 'ACTIVE');
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: '', unit_price: '', notes: '' });
@@ -323,7 +329,7 @@ function CreateOrderModal({ open, onClose }) {
         }} required>
           <option value="">Select a product…</option>
           {orderableProducts.map((product) => (
-            <option key={product.id} value={product.id}>{product.name}</option>
+            <option key={product.id} value={product.id}>{productDetailLabel(productDetail(product.id))}</option>
           ))}
         </Select>
         <p className="text-xs text-gray-500">Choose the warehouse when the order is confirmed.</p>
@@ -382,7 +388,7 @@ function InvoiceOrderModal({ order, onClose }) {
   return (
     <Modal open onClose={onClose} title={`Deliver ${order.order_number}`}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-gray-600">Enter the quantity delivered. Reserved stock is used first; any extra quantity must be available in the same warehouse and batch.</p>
+        <p className="text-sm text-gray-600">Enter the quantity delivered against each line. It cannot exceed the quantity confirmed, and delivering releases the stock reserved for this order and creates the invoice.</p>
         <div className="overflow-hidden rounded-xl border border-gray-100 text-sm">
           {items.map((item, i) => {
             const reservedForLine = Number(order.items[i]?.quantity) || 0;

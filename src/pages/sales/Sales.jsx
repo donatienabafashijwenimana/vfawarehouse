@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Plus, FileText, CreditCard, Wallet, Clock3 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { FileText, CreditCard, Clock3, ClipboardList } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { DataTable } from '../../components/ui/DataTable';
-import { Button, Select, Input, StatusBadge } from '../../components/ui/primitives';
+import { Button, StatusBadge } from '../../components/ui/primitives';
 import { Modal } from '../../components/ui/Modal';
 import { PageHeader, KPICard } from '../../components/ui/KPICard';
 import { FilterSelect } from '../../components/ui/feedback';
@@ -10,10 +11,10 @@ import { formatDate, formatRWF, prettyLabel } from '../../lib/format';
 
 export default function Sales() {
   const store = useStore();
+  const navigate = useNavigate();
   const isCustomer = store.profile?.role === 'customer';
   const myCustomerId = store.profile?.customer_id;
 
-  const [createOpen, setCreateOpen] = useState(false);
   const [payStatusFilter, setPayStatusFilter] = useState('');
   const [detail, setDetail] = useState(null);
 
@@ -33,8 +34,12 @@ export default function Sales() {
     <div className="space-y-6">
       <PageHeader
         title={isCustomer ? 'My Invoices' : 'Sales Management'}
-        subtitle={isCustomer ? 'Review invoice totals, amounts paid, and balances due.' : 'Confirm a sale to update stock'}
-        actions={!isCustomer && <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> New Sale</Button>}
+        subtitle={isCustomer ? 'Review invoice totals, amounts paid, and balances due.' : 'Every invoice here comes from a delivered order'}
+        actions={!isCustomer && (
+          <Button variant="secondary" onClick={() => navigate('/app/orders')}>
+            <ClipboardList className="h-4 w-4" /> Go to Orders
+          </Button>
+        )}
       />
 
       {isCustomer ? (
@@ -75,7 +80,13 @@ export default function Sales() {
         rows={rows}
         searchKeys={['invoice_number']}
         searchPlaceholder="Search invoice number…"
-        emptyHint={isCustomer ? 'No invoices yet.' : 'No invoices match this filter.'}
+        emptyHint={
+          isCustomer
+            ? 'No invoices yet.'
+            : allSales.length === 0
+              ? 'No invoices yet. Invoices are created by delivering an order — go to Orders and use Deliver.'
+              : 'No invoices match this filter.'
+        }
         filters={
           <FilterSelect
             value={payStatusFilter}
@@ -132,67 +143,6 @@ export default function Sales() {
         )}
       </Modal>
 
-      {!isCustomer && (
-        <CreateSaleModal open={createOpen} onClose={() => setCreateOpen(false)} />
-      )}
     </div>
-  );
-}
-
-function CreateSaleModal({ open, onClose }) {
-  const store = useStore();
-  const pushToast = useStore((s) => s.pushToast);
-  const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: '', unit_price: '', discount: '0' });
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const product = store.products.find((p) => p.id === form.product_id);
-
-  function submit(e) {
-    e.preventDefault();
-    const qty = Number(form.quantity);
-    const price = Number(form.unit_price || product?.selling_price);
-    if (!form.customer_id) return pushToast('Select a customer', 'error');
-    if (!form.product_id) return pushToast('Select a product', 'error');
-    if (!Number.isFinite(qty) || qty <= 0) return pushToast('Quantity must be positive', 'error');
-    try {
-      store.createSale({
-        customer_id: form.customer_id,
-        items: [{ product_id: form.product_id, quantity: qty, unit_price: price }],
-        discount: Number(form.discount || 0),
-      });
-      pushToast('Sale created — stock updated', 'success');
-      setForm({ customer_id: '', product_id: '', quantity: '', unit_price: '', discount: '0' });
-      onClose();
-    } catch (err) {
-      pushToast(err.message, 'error');
-    }
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title="New Sale">
-      <form onSubmit={submit} className="space-y-4">
-        <Select label="Customer" value={form.customer_id} onChange={set('customer_id')} required>
-          <option value="">Select customer…</option>
-          {store.customers.filter((c) => c.status === 'ACTIVE').map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </Select>
-        <Select label="Product" value={form.product_id} onChange={set('product_id')} required>
-          <option value="">Select product…</option>
-          {store.products.filter((p) => p.status === 'ACTIVE').map((p) => (
-            <option key={p.id} value={p.id}>{p.name} — {formatRWF(p.selling_price)}/kg</option>
-          ))}
-        </Select>
-        <div className="grid grid-cols-3 gap-3">
-          <Input label="Quantity (kg)" type="number" min="1" value={form.quantity} onChange={set('quantity')} required />
-          <Input label="Unit price (RWF)" type="number" min="0" value={form.unit_price} onChange={set('unit_price')} placeholder={product ? String(product.selling_price) : ''} />
-          <Input label="Discount (RWF)" type="number" min="0" value={form.discount} onChange={set('discount')} />
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit">Create Sale</Button>
-        </div>
-      </form>
-    </Modal>
   );
 }
